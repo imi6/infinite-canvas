@@ -74,7 +74,8 @@ export type ChannelCredentialsImportResult = {
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 const CHANNEL_MODEL_SEPARATOR = "::";
-const OPENAI_BASE_URL = "https://api.openai.com";
+export const DEFAULT_API_BASE_URLS = ["https://sub.zzshu.cc", "https://apisub.zzshu.cc"];
+const OPENAI_BASE_URL = DEFAULT_API_BASE_URLS[0];
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 export const LOCAL_PROXY_PACKAGE = "@basketikun/canvas-proxy";
 export const DEFAULT_LOCAL_PROXY_URL = "http://127.0.0.1:23210";
