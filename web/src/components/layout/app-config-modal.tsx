@@ -1,7 +1,7 @@
 import { App, Button, Form, Input, Modal, Progress, Radio, Select, Switch, Tabs } from "antd";
 import type { TFunction } from "i18next";
-import { Cloud, Download, Pencil, Plus, RefreshCw, Trash2, Upload, Wifi } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Cloud, Download, KeyRound, Pencil, Plus, RefreshCw, Trash2, Upload, Wifi } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ModelPicker } from "@/components/model-picker";
@@ -14,9 +14,10 @@ import type { AppLocale } from "@/i18n";
 import { exportAppConfig, importAppConfig } from "@/services/config-file";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
+import { fetchChannelModels } from "@/services/api/image";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
 import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaScaleOptions, parseVideoResolution } from "@/lib/media-size";
-import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { DEFAULT_API_BASE_URLS, SITE_PRESET_MODELS, createModelChannel, encodeChannelModel, guessCapability, isSiteChannel, modelOptionName, modelOptionsFromChannels, normalizeChannelModels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -53,6 +54,9 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     const { message } = App.useApp();
     const { i18n, t } = useTranslation();
     const configInputRef = useRef<HTMLInputElement>(null);
+    const siteKeyInputId = useId();
+    const [siteApiKey, setSiteApiKey] = useState("");
+    const [enablingSite, setEnablingSite] = useState(false);
     const [activeTab, setActiveTab] = useState<ConfigTabKey>(initialTab);
     const [editingChannelId, setEditingChannelId] = useState("");
     const [testingWebdav, setTestingWebdav] = useState(false);
@@ -60,6 +64,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     const [webdavSyncStatus, setWebdavSyncStatus] = useState("");
     const [webdavDomainProgress, setWebdavDomainProgress] = useState(createWebdavDomainProgress);
     const config = useConfigStore((state) => state.config);
+    const siteChannel = config.channels.find(isSiteChannel);
     const webdav = useConfigStore((state) => state.webdav);
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const updateWebdavConfig = useConfigStore((state) => state.updateWebdavConfig);
@@ -113,6 +118,56 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
 
     const saveChannel = (channel: ModelChannel) => {
         updateChannels(config.channels.map((item) => (item.id === channel.id ? channel : item)));
+    };
+
+    const enableSite = async () => {
+        const apiKey = siteApiKey.trim() || siteChannel?.apiKey.trim() || "";
+        if (!apiKey) {
+            message.error(t("config.siteSetup.keyRequired"));
+            return;
+        }
+        setEnablingSite(true);
+        try {
+            const channel = createModelChannel({ ...siteChannel, name: siteChannel?.name || "sub.zzshu.cc", baseUrl: DEFAULT_API_BASE_URLS[0], apiFormat: "openai", apiKey });
+            const names = await fetchChannelModels(channel);
+            if (!names.length) throw new Error(t("config.siteSetup.emptyModels"));
+            const current = useConfigStore.getState().config;
+            const existing = current.channels.find((item) => item.id === channel.id);
+            const existingModels = new Map((existing?.models || []).map((model) => [model.name, model]));
+            const available = normalizeChannelModels(names.map((name) => existingModels.get(name) || { name, capability: guessCapability(name) }));
+            if (!available.length) throw new Error(t("config.siteSetup.emptyModels"));
+            const updated: ModelChannel = { ...(existing || channel), baseUrl: channel.baseUrl, apiKey, apiFormat: "openai", models: normalizeChannelModels([...(existing?.models || []), ...available]) };
+            const channels = existing ? current.channels.map((item) => item.id === channel.id ? updated : item) : [...current.channels, updated];
+            const defaultFor = (capability: ModelCapability, value: string) => {
+                // 非创作端点的模型保留手动配置，不自动设为默认；自定义脚本按已有能力使用。
+                const models = available.filter((model) => {
+                    if (model.capability !== capability) return false;
+                    if (model.script?.trim()) return true;
+                    if (/embed|rerank|whisper|transcri|moderation|realtime|suno|speech[-_]to[-_]text|(^|[-_])(asr|stt|udio)([-_]|$)|转录|识别/i.test(model.name)) return false;
+                    return capability !== "audio" || /tts|speech|语音合成/i.test(model.name);
+                });
+                const preferred = models.find((model) => SITE_PRESET_MODELS.some((preset) => preset.capability === capability && preset.name === model.name)) || models.find((model) => model.name === modelOptionName(value)) || models[0];
+                return preferred ? encodeChannelModel(channel.id, preferred.name) : "";
+            };
+            const imageModel = defaultFor("image", current.imageModel);
+            useConfigStore.setState({ config: {
+                ...withChannels(current, channels),
+                baseUrl: channel.baseUrl,
+                apiKey,
+                apiFormat: "openai",
+                model: imageModel,
+                imageModel,
+                videoModel: defaultFor("video", current.videoModel),
+                textModel: defaultFor("text", current.textModel),
+                audioModel: defaultFor("audio", current.audioModel),
+            } });
+            setSiteApiKey("");
+            message.success(t("config.siteSetup.enabled", { count: available.length }));
+        } catch (error) {
+            message.error(t("config.siteSetup.failed", { error: error instanceof Error ? error.message : t("config.modelSelect.fetchFailed") }));
+        } finally {
+            setEnablingSite(false);
+        }
     };
 
     const testWebdav = async () => {
@@ -188,6 +243,22 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                         label: t("config.tabs.channels"),
                         children: (
                             <div>
+                                <div className="mb-6 rounded-xl border border-border bg-card p-5">
+                                    <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                                        <div>
+                                            <div className="flex items-center gap-2 text-sm font-semibold"><KeyRound className="size-4" />{t("config.siteSetup.title")} · sub.zzshu.cc</div>
+                                            <p className="mt-1.5 text-xs text-muted-foreground">{t("config.siteSetup.description")}</p>
+                                        </div>
+                                        <a href={DEFAULT_API_BASE_URLS[0]} target="_blank" rel="noopener noreferrer" className="text-xs underline underline-offset-4">{t("config.siteSetup.visit")} ↗</a>
+                                    </div>
+                                    <label htmlFor={siteKeyInputId} className="mb-2 block text-xs font-medium">{t("config.siteSetup.apiKey")}</label>
+                                    <div className="flex flex-col gap-2 sm:flex-row">
+                                        <Input.Password id={siteKeyInputId} value={siteApiKey} onChange={(event) => setSiteApiKey(event.target.value)} onPressEnter={() => { if (!enablingSite) void enableSite(); }} placeholder={siteChannel?.apiKey ? t("config.siteSetup.savedKeyPlaceholder") : "sk-..."} autoComplete="off" disabled={enablingSite} className="min-w-0 flex-1" />
+                                        <Button type="primary" loading={enablingSite} disabled={!siteApiKey.trim() && !siteChannel?.apiKey.trim()} onClick={() => void enableSite()}>{t("config.siteSetup.save")}</Button>
+                                    </div>
+                                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t("config.siteSetup.help")}</p>
+                                    <p className="mt-1 text-xs text-muted-foreground">{t("config.siteSetup.keyStored")}</p>
+                                </div>
                                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                                     <div className="text-xs text-stone-500">{t("config.channels.description")}</div>
                                     <Button type="primary" icon={<Plus className="size-4" />} onClick={addChannel}>

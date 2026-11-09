@@ -79,6 +79,7 @@ const OPENAI_BASE_URL = DEFAULT_API_BASE_URLS[0];
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 export const LOCAL_PROXY_PACKAGE = "@basketikun/canvas-proxy";
 export const DEFAULT_LOCAL_PROXY_URL = "http://127.0.0.1:23210";
+export const SITE_PRESET_MODELS: ChannelModel[] = [{ name: "官转SD2.5-30图版-480P", capability: "video" }];
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
@@ -88,23 +89,18 @@ export const defaultConfig: AiConfig = {
     channels: [
         {
             id: "default",
-            name: i18n.t("config.channels.defaultName"),
+            name: "sub.zzshu.cc",
             baseUrl: OPENAI_BASE_URL,
             apiKey: "",
             apiFormat: "openai",
-            models: [
-                { name: "gpt-image-2", capability: "image" },
-                { name: "grok-imagine-video", capability: "video" },
-                { name: "gpt-5.5", capability: "text" },
-                { name: "gpt-4o-mini-tts", capability: "audio" },
-            ],
+            models: SITE_PRESET_MODELS.map((model) => ({ ...model })),
         },
     ],
-    model: "default::gpt-image-2",
-    imageModel: "default::gpt-image-2",
-    videoModel: "default::grok-imagine-video",
-    textModel: "default::gpt-5.5",
-    audioModel: "default::gpt-4o-mini-tts",
+    model: "",
+    imageModel: "",
+    videoModel: encodeChannelModel("default", SITE_PRESET_MODELS[0].name),
+    textModel: "",
+    audioModel: "",
     audioVoice: "alloy",
     audioFormat: "mp3",
     audioSpeed: "1",
@@ -116,7 +112,7 @@ export const defaultConfig: AiConfig = {
     videoMode: "frames",
     systemPrompt: "",
     reasoningEffort: "auto",
-    models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
+    models: SITE_PRESET_MODELS.map((model) => encodeChannelModel("default", model.name)),
     quality: "auto",
     size: "1:1",
     background: "",
@@ -151,7 +147,7 @@ type ConfigStore = {
     clearPromptContinue: () => void;
 };
 
-const VIDEO_KEYWORDS = ["video", "sora", "veo", "kling", "wan", "hailuo"];
+const VIDEO_KEYWORDS = ["video", "seedance", "sora", "veo", "kling", "wan", "hailuo"];
 
 export function boolConfig(value: string, fallback: boolean) {
     return value ? value === "true" : fallback;
@@ -161,6 +157,8 @@ const IMAGE_KEYWORDS = ["seedream", "gpt-image", "image", "dall-e", "dalle", "im
 
 /** Best-effort default capability for a freshly fetched model name; user can override in the channel editor. */
 export function guessCapability(name: string): ModelCapability {
+    const preset = SITE_PRESET_MODELS.find((model) => model.name === name);
+    if (preset) return preset.capability;
     const value = name.toLowerCase();
     if (VIDEO_KEYWORDS.some((keyword) => value.includes(keyword))) return "video";
     if (AUDIO_KEYWORDS.some((keyword) => value.includes(keyword))) return "audio";
@@ -319,13 +317,14 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
 
 export function createModelChannel(channel?: Partial<ModelChannel>): ModelChannel {
     const apiFormat = normalizeApiFormat(channel?.apiFormat);
+    const baseUrl = channel?.baseUrl?.trim() || defaultBaseUrlForApiFormat(apiFormat);
     return {
         id: channel?.id?.trim() || nanoid(),
         name: channel?.name?.trim() || i18n.t("config.channels.newName"),
-        baseUrl: channel?.baseUrl?.trim() || defaultBaseUrlForApiFormat(apiFormat),
+        baseUrl,
         apiKey: channel?.apiKey || "",
         apiFormat,
-        models: normalizeChannelModels(channel?.models),
+        models: normalizeChannelModels(channel?.models === undefined && isSiteChannel({ baseUrl, apiFormat }) ? SITE_PRESET_MODELS : channel?.models),
     };
 }
 
@@ -356,9 +355,16 @@ export function upsertChannelCredentials(
         baseUrl,
         apiKey,
         apiFormat: "openai",
-        models: [],
     });
-    return { status: "created", channelName: channel.name, config: { ...config, channels: [...config.channels, channel] } };
+    const channels = [...config.channels, channel];
+    const nextConfig = { ...config, channels, models: modelOptionsFromChannels(channels) };
+    const videoModel = channel.models.find((model) => model.capability === "video");
+    if (videoModel && !findChannelModel(nextConfig, config.videoModel)) nextConfig.videoModel = encodeChannelModel(channel.id, videoModel.name);
+    return { status: "created", channelName: channel.name, config: nextConfig };
+}
+
+export function isSiteChannel(channel: Pick<ModelChannel, "baseUrl" | "apiFormat">) {
+    return channel.apiFormat === "openai" && DEFAULT_API_BASE_URLS.some((baseUrl) => normalizedBaseUrlKey(channel.baseUrl) === normalizedBaseUrlKey(baseUrl));
 }
 
 function isHttpBaseUrl(baseUrl: string) {

@@ -3,7 +3,7 @@ import { ListPlus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { DEFAULT_API_BASE_URLS, defaultBaseUrlForApiFormat, guessCapability, normalizeChannelModels, type ApiCallFormat, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { DEFAULT_API_BASE_URLS, defaultBaseUrlForApiFormat, guessCapability, isSiteChannel, normalizeChannelModels, type ApiCallFormat, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 import { ModelScriptEditor } from "./model-script-editor";
 import { ModelSelectModal } from "./model-select-modal";
 
@@ -82,6 +82,7 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
                 <label className="block md:col-span-2">
                     <span className="mb-1 block text-sm font-medium">API Key</span>
                     <Input.Password value={draft.apiKey} onChange={(event) => patch({ apiKey: event.target.value })} placeholder="sk-..." />
+                    {isSiteChannel(draft) ? <span className="mt-1.5 block text-xs text-muted-foreground">{t("config.channelEditor.siteKeyHint")}</span> : null}
                 </label>
             </div>
 
