@@ -256,6 +256,11 @@ export const useConfigStore = create<ConfigStore>()(
                 const config = { ...defaultConfig, ...persistedConfig };
                 if (!Array.isArray(persistedConfig.channels)) config.channels = [];
                 const channels = normalizeChannels(config);
+                const defaultChannel = channels.find((channel) => channel.id === "default" && channel.apiFormat === "openai");
+                if (defaultChannel && normalizedBaseUrlKey(defaultChannel.baseUrl) === "https://api.openai.com") {
+                    defaultChannel.baseUrl = OPENAI_BASE_URL;
+                    if (normalizedBaseUrlKey(config.baseUrl) === "https://api.openai.com") config.baseUrl = OPENAI_BASE_URL;
+                }
                 const models = modelOptionsFromChannels(channels);
                 return {
                     ...current,
