@@ -1,6 +1,6 @@
-import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, Link2, LoaderCircle, Plus, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ChevronDown, ClipboardPaste, Download, FolderPlus, History, ImageIcon, Link2, LoaderCircle, MoreHorizontal, Music2, Plus, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Tag, Typography } from "antd";
+import { App, Button, Checkbox, Drawer, Dropdown, Empty, Input, Modal, Segmented, Tag, Typography, theme as antdTheme } from "antd";
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 import { saveAs } from "file-saver";
@@ -9,7 +9,7 @@ import { useTranslation } from "react-i18next";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
-import { VideoSettingsPanel, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoModeLabel, videoSizeLabel } from "@/components/video-settings-panel";
+import { VideoSettingsPanel, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoSizeLabel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { clampVideoSeconds } from "@/lib/media-size";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
@@ -18,7 +18,7 @@ import { resolveImageUrl, ensureImagePreview, getImagePreviewRevision, previewUr
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask, type VideoGenerationTask } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
-import { boolConfig, modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { boolConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -44,6 +44,9 @@ type GenerationResult = {
     queryPaused?: boolean;
 };
 
+type CreationMode = "text" | "frames" | "reference";
+type ReferenceLinkKind = "image" | "video" | "audio" | "firstFrame" | "lastFrame";
+
 type GenerationLog = {
     id: string;
     createdAt: number;
@@ -52,6 +55,7 @@ type GenerationLog = {
     time: string;
     model: string;
     config: GenerationLogConfig;
+    creationMode: CreationMode;
     references: ReferenceImage[];
     videos: ReferenceVideo[];
     audios: ReferenceAudio[];
@@ -67,25 +71,28 @@ type GenerationLog = {
 
 type GenerationLogConfig = Pick<AiConfig, "model" | "videoModel" | "size" | "vquality" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark" | "videoMode">;
 
-type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
-
 const LOG_STORE_KEY = "infinite-canvas:video_generation_logs";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
 
 export default function VideoPage() {
     const { message } = App.useApp();
     const { t } = useTranslation();
+    const { token } = antdTheme.useToken();
+    const canvasTheme = canvasThemes[useThemeStore((state) => state.theme)];
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
     const activeLogIdsRef = useRef<Set<string>>(new Set());
-    const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
     const [prompt, setPrompt] = useState("");
+    const [creationMode, setCreationMode] = useState<CreationMode>("text");
+    const [firstFrame, setFirstFrame] = useState<ReferenceImage | null>(null);
+    const [lastFrame, setLastFrame] = useState<ReferenceImage | null>(null);
+    const [referenceMediaTab, setReferenceMediaTab] = useState<"image" | "video" | "audio">("image");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [referenceVideos, setReferenceVideos] = useState<ReferenceVideo[]>([]);
     const [referenceAudios, setReferenceAudios] = useState<ReferenceAudio[]>([]);
@@ -93,10 +100,9 @@ export default function VideoPage() {
     const [logs, setLogs] = useState<GenerationLog[]>([]);
     const [running, setRunning] = useState(false);
     const [logsOpen, setLogsOpen] = useState(false);
-    const [settingsOpen, setSettingsOpen] = useState(false);
     const [promptDialogOpen, setPromptDialogOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
-    const [referenceLinkKind, setReferenceLinkKind] = useState<"image" | "video" | "audio" | null>(null);
+    const [referenceLinkKind, setReferenceLinkKind] = useState<ReferenceLinkKind | null>(null);
     const [referenceLinks, setReferenceLinks] = useState("");
     const [startedAt, setStartedAt] = useState(0);
     const [elapsedMs, setElapsedMs] = useState(0);
@@ -112,9 +118,9 @@ export default function VideoPage() {
     const agentTaskIdRef = useRef<string | undefined>(undefined);
 
     const model = effectiveConfig.videoModel || effectiveConfig.model;
-    const canGenerate = Boolean(prompt.trim() || references.length || referenceVideos.length || referenceAudios.length);
-    const referenceLinkLabel = t(`videoWorkbench.${referenceLinkKind === "video" ? "videoReferences" : referenceLinkKind === "audio" ? "audioReferences" : "references"}`);
-    const referenceLinkLimit = referenceLinkKind === "image" ? 30 : 10;
+    const canGenerate = creationMode === "frames" ? Boolean(firstFrame) : Boolean(prompt.trim() || (creationMode === "reference" && (references.length || referenceVideos.length || referenceAudios.length)));
+    const referenceLinkLabel = t(`videoWorkbench.${referenceLinkKind === "firstFrame" || referenceLinkKind === "lastFrame" ? referenceLinkKind : referenceLinkKind === "video" ? "videoReferences" : referenceLinkKind === "audio" ? "audioReferences" : "references"}`);
+    const referenceLinkLimit = referenceLinkKind === "firstFrame" || referenceLinkKind === "lastFrame" ? 1 : referenceLinkKind === "image" ? 30 : 10;
 
     useEffect(() => {
         if (!running || !startedAt) return;
@@ -140,7 +146,7 @@ export default function VideoPage() {
         setReferences((value) => [...value, ...nextReferences].slice(0, 30));
     };
 
-    const openReferenceLinks = (kind: "image" | "video" | "audio") => {
+    const openReferenceLinks = (kind: ReferenceLinkKind) => {
         setReferenceLinks("");
         setReferenceLinkKind(kind);
     };
@@ -158,12 +164,16 @@ export default function VideoPage() {
             message.error(t("videoWorkbench.invalidReferenceLinks"));
             return;
         }
-        const count = referenceLinkKind === "image" ? references.length : referenceLinkKind === "video" ? referenceVideos.length : referenceAudios.length;
+        const count = referenceLinkKind === "firstFrame" || referenceLinkKind === "lastFrame" ? 0 : referenceLinkKind === "image" ? references.length : referenceLinkKind === "video" ? referenceVideos.length : referenceAudios.length;
         if (count + links.length > referenceLinkLimit) {
             message.error(t("videoWorkbench.referenceLimit", { limit: referenceLinkLimit }));
             return;
         }
-        if (referenceLinkKind === "image") {
+        if (referenceLinkKind === "firstFrame" || referenceLinkKind === "lastFrame") {
+            const image = { id: nanoid(), name: links[0], type: "image/*", url: links[0], dataUrl: links[0] };
+            if (referenceLinkKind === "firstFrame") setFirstFrame(image);
+            else setLastFrame(image);
+        } else if (referenceLinkKind === "image") {
             setReferences((value) => [...value, ...links.map((url) => ({ id: nanoid(), name: url, type: "image/*", url, dataUrl: url }))]);
         } else {
             const media = links.map((url) => ({ id: nanoid(), name: url, type: "", url }));
@@ -231,14 +241,14 @@ export default function VideoPage() {
         let submittedLog: GenerationLog | undefined;
         try {
             const task = await createVideoGenerationTask(snapshot.config, snapshot.text, snapshot.references, { videos: snapshot.videos, audios: snapshot.audios });
-            const log = buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, videos: snapshot.videos, audios: snapshot.audios, durationMs: 0, status: "pending", task });
+            const log = buildLog({ prompt: snapshot.text, model, config: snapshot.config, creationMode: snapshot.creationMode, references: snapshot.references, videos: snapshot.videos, audios: snapshot.audios, durationMs: 0, status: "pending", task });
             submittedLog = log;
             setPreviewLog(log);
             await saveLog(log, false);
             void pollGenerationLog(log, snapshot.config, agentTaskId);
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : t("workbench.generationFailed");
-            const log = submittedLog ? { ...submittedLog, error: errorMessage } : buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, videos: snapshot.videos, audios: snapshot.audios, durationMs: performance.now() - batchStartedAt, status: "failed", error: errorMessage });
+            const log = submittedLog ? { ...submittedLog, error: errorMessage } : buildLog({ prompt: snapshot.text, model, config: snapshot.config, creationMode: snapshot.creationMode, references: snapshot.references, videos: snapshot.videos, audios: snapshot.audios, durationMs: performance.now() - batchStartedAt, status: "failed", error: errorMessage });
             setPreviewLog(log);
             setResults([{ id: log.id, status: "failed", error: errorMessage, canResume: Boolean(log.task), queryPaused: Boolean(log.task) }]);
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", successCount: 0, failCount: 1, error: errorMessage });
@@ -272,7 +282,14 @@ export default function VideoPage() {
 
     const buildRequestSnapshot = () => {
         const text = prompt.trim();
-        if (!text && !references.length && !referenceVideos.length && !referenceAudios.length) {
+        if (creationMode === "frames" && !firstFrame) {
+            message.error(t("videoWorkbench.firstFrameRequired"));
+            return null;
+        }
+        const images = creationMode === "frames" && firstFrame ? [firstFrame, ...(lastFrame ? [lastFrame] : [])] : creationMode === "reference" ? [...references] : [];
+        const videos = creationMode === "reference" ? [...referenceVideos] : [];
+        const audios = creationMode === "reference" ? [...referenceAudios] : [];
+        if (!text && !images.length && !videos.length && !audios.length) {
             message.error(t("videoWorkbench.promptRequired"));
             return null;
         }
@@ -281,7 +298,7 @@ export default function VideoPage() {
             openConfigDialog(true);
             return null;
         }
-        return { text, config: buildVideoConfig(effectiveConfig, model), references: [...references], videos: [...referenceVideos], audios: [...referenceAudios] };
+        return { text, creationMode, config: buildVideoConfig({ ...effectiveConfig, videoMode: creationMode === "reference" ? "reference" : "frames" }, model), references: images, videos, audios };
     };
 
     const retryResult = (result: GenerationResult) => {
@@ -316,13 +333,26 @@ export default function VideoPage() {
             setPrompt(payload.content);
         } else if (payload.kind === "image") {
             const stored = await uploadImage(payload.dataUrl);
-            setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }].slice(0, 30));
+            const image = { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey, url: /^https?:\/\//i.test(payload.dataUrl) ? payload.dataUrl : undefined };
+            if (creationMode === "frames") {
+                if (!firstFrame) setFirstFrame(image);
+                else setLastFrame(image);
+            } else {
+                setReferences((value) => [...value, image].slice(0, 30));
+                setCreationMode("reference");
+                setReferenceMediaTab("image");
+            }
         }
         setAssetPickerOpen(false);
     };
 
     const createSession = () => {
+        setLogsOpen(false);
         setPrompt("");
+        setCreationMode("text");
+        setFirstFrame(null);
+        setLastFrame(null);
+        setReferenceMediaTab("image");
         setReferences([]);
         setReferenceVideos([]);
         setReferenceAudios([]);
@@ -419,9 +449,13 @@ export default function VideoPage() {
         setPreviewLog(log);
         setLogsOpen(false);
         setPrompt(log.prompt);
-        setReferences(log.references || []);
+        setCreationMode(log.creationMode);
+        setFirstFrame(log.creationMode === "frames" ? log.references[0] || null : null);
+        setLastFrame(log.creationMode === "frames" ? log.references[1] || null : null);
+        setReferences(log.creationMode === "reference" ? log.references : []);
         setReferenceVideos(log.videos || []);
         setReferenceAudios(log.audios || []);
+        setReferenceMediaTab(log.references.length ? "image" : log.videos.length ? "video" : log.audios.length ? "audio" : "image");
         if (log.config.videoModel || log.model) updateConfig("videoModel", log.config.videoModel || log.model);
         if (log.config.size) updateConfig("size", log.config.size);
         if (log.config.vquality) updateConfig("vquality", log.config.vquality);
@@ -433,175 +467,195 @@ export default function VideoPage() {
     };
 
     return (
-        <div className="flex h-full flex-col overflow-hidden bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-100">
-            <main className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-3 lg:grid-cols-[300px_minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[320px_minmax(0,1fr)]">
-                <aside className="thin-scrollbar hidden min-h-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:block">
-                    <LogPanel logs={logs} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={() => setDeleteConfirmOpen(true)} onPreviewLog={previewGenerationLog} />
-                </aside>
+        <div className="flex h-full flex-col overflow-hidden" style={{ background: token.colorBgLayout, color: token.colorText }}>
+            <main className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5 lg:overflow-hidden">
+                <div className="mx-auto grid w-full max-w-[1520px] gap-5 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(0,1.25fr)_minmax(300px,0.85fr)]">
+                    <section className="flex min-w-0 flex-col overflow-hidden rounded-2xl border lg:min-h-0" style={{ background: token.colorBgContainer, borderColor: token.colorBorderSecondary }}>
+                        <div className="thin-scrollbar p-5 sm:p-7 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+                            <header className="mb-7 flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <h1 className="text-xl font-semibold tracking-tight">{t("videoWorkbench.creationSettings")}</h1>
+                                    <p className="mt-1.5 text-xs leading-relaxed" style={{ color: token.colorTextSecondary }}>{t("videoWorkbench.creationSubtitle")}</p>
+                                </div>
+                                <div className="flex shrink-0 gap-1">
+                                    <Button type="text" size="small" icon={<History className="size-3.5" />} onClick={() => setLogsOpen(true)}>
+                                        {t("workbench.logs")} · {logs.length}
+                                    </Button>
+                                    <Button type="text" size="small" icon={<Plus className="size-3.5" />} onClick={createSession}>{t("workbench.new")}</Button>
+                                </div>
+                            </header>
 
-                <section className="grid gap-3 lg:min-h-0 lg:overflow-hidden xl:grid-cols-[420px_minmax(0,1fr)]">
-                    <div className="thin-scrollbar flex flex-col rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto">
-                        <div className="flex items-start justify-between gap-3">
-                            <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{t("videoWorkbench.title")}</h1>
-                            <div className="flex shrink-0 gap-2 lg:hidden">
-                                <Button icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>
-                                    {t("workbench.logs")}
-                                </Button>
-                                <Button icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
-                                    {t("workbench.settings")}
-                                </Button>
-                            </div>
-                        </div>
-
-                        <div className="mt-6 space-y-5">
-                            <div>
-                                <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">{t("workbench.prompt")}</span>
-                                    <div className="flex gap-2">
-                                        <Button size="small" icon={<BookOpen className="size-3.5" />} onClick={() => setPromptDialogOpen(true)}>
-                                            {t("workbench.viewPrompts")}
-                                        </Button>
-                                        <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => setAssetPickerOpen(true)}>
-                                            {t("workbench.viewAssets")}
-                                        </Button>
+                            <div className="space-y-7">
+                                <div>
+                                    <div className="mb-2.5 text-xs font-semibold" style={{ color: token.colorTextSecondary }}>{t("videoWorkbench.generationModel")}</div>
+                                    <div className="flex items-center gap-3 rounded-xl border p-3.5" style={{ borderColor: token.colorBorderSecondary }}>
+                                        <VideoIcon className="size-5 shrink-0" style={{ color: token.colorTextSecondary }} />
+                                        <div className="min-w-0 flex-1">
+                                            <ModelPicker config={effectiveConfig} value={model} onChange={(value) => updateConfig("videoModel", value)} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
+                                        </div>
                                     </div>
                                 </div>
-                                <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder={t("videoWorkbench.promptPlaceholder")} />
-                            </div>
 
-                            <div className="min-w-0">
-                                <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">{t("videoWorkbench.references")}</span>
-                                    <div className="flex gap-2">
-                                        <Button size="small" icon={<Link2 className="size-3.5" />} disabled={references.length >= 30} onClick={() => openReferenceLinks("image")}>
-                                            {t("videoWorkbench.link")}
-                                        </Button>
-                                        <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
-                                            {t("workbench.clipboard")}
-                                        </Button>
-                                        <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
-                                            {t("workbench.upload")}
-                                        </Button>
+                                <div>
+                                    <div className="mb-2.5 text-xs font-semibold" style={{ color: token.colorTextSecondary }}>{t("videoWorkbench.creationMethod")}</div>
+                                    <Segmented block size="large" value={creationMode} onChange={(value) => setCreationMode(value as CreationMode)} options={(["text", "frames", "reference"] as const).map((value) => ({ value, label: t("videoWorkbench.modes." + value) }))} />
+                                    <div className="mt-3 rounded-xl border px-4 py-3.5" style={{ background: token.colorFillAlter, borderColor: token.colorBorderSecondary }}>
+                                        <div className="text-sm font-medium">{t("videoWorkbench.modeDescriptions." + creationMode)}</div>
+                                        <p className="mt-1.5 text-xs leading-relaxed" style={{ color: token.colorTextSecondary }}>{t("videoWorkbench.modeHints." + creationMode)}</p>
                                     </div>
                                 </div>
-                                <div
-                                    className={`hover-scrollbar hover-scrollbar-hint flex min-h-24 w-full min-w-0 max-w-full gap-2 overflow-x-scroll overflow-y-hidden rounded-lg border border-dashed p-2 pb-3 overscroll-x-contain transition-colors ${referenceDragTarget ? "border-stone-900 bg-stone-100/80 dark:border-stone-100 dark:bg-stone-900/80" : "border-stone-300 dark:border-stone-700"}`}
-                                    onDragEnter={handleReferenceDragEnter}
-                                    onDragOver={(event) => {
-                                        event.preventDefault();
-                                        event.dataTransfer.dropEffect = "copy";
-                                    }}
-                                    onDragLeave={handleReferenceDragLeave}
-                                    onDrop={handleReferenceDrop}
-                                >
-                                    {references.map((item, index) => (
-                                        <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
-                                            <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} className="size-full object-cover" />
-                                            <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{index + 1}</span>
-                                            <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
-                                            <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label={t("videoWorkbench.removeImage")}>
-                                                <Trash2 className="size-3.5" />
-                                            </button>
-                                        </div>
-                                    ))}
-                                    {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{referenceDragTarget ? t("videoWorkbench.dropReferences") : t("videoWorkbench.noImages")}</div> : null}
-                                </div>
-                                <Typography.Paragraph type="secondary" className="!mb-0 mt-2 !text-xs">{t("videoWorkbench.publicReferencesHint")}</Typography.Paragraph>
-                            </div>
 
-                            {(["video", "audio"] as const).map((kind) => {
-                                const items = kind === "video" ? referenceVideos : referenceAudios;
-                                return (
-                                    <div key={kind} className="min-w-0">
-                                        <div className="mb-2 flex items-center justify-between gap-3">
-                                            <span className="text-base font-semibold">{t(`videoWorkbench.${kind === "video" ? "videoReferences" : "audioReferences"}`)} <span className="text-xs font-normal text-stone-500">{items.length}/10</span></span>
-                                            <Button size="small" icon={<Link2 className="size-3.5" />} disabled={items.length >= 10} onClick={() => openReferenceLinks(kind)}>
-                                                {t("videoWorkbench.link")}
-                                            </Button>
+                                <div>
+                                    <div className="mb-2.5 flex items-center justify-between">
+                                        <span className="text-xs font-semibold" style={{ color: token.colorTextSecondary }}>{t("videoWorkbench.description")}</span>
+                                        <span className="text-xs" style={{ color: token.colorTextTertiary }}>{t("videoWorkbench.characters", { count: prompt.length })}</span>
+                                    </div>
+                                    <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} autoSize={{ minRows: 5, maxRows: 9 }} placeholder={t("videoWorkbench.promptPlaceholder")} className="!rounded-xl !p-4" />
+                                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                                        <p className="text-xs leading-relaxed" style={{ color: token.colorTextTertiary }}>{t("videoWorkbench.describeHint")}</p>
+                                        <div className="flex gap-1">
+                                            <Button type="text" size="small" icon={<BookOpen className="size-3.5" />} onClick={() => setPromptDialogOpen(true)}>{t("workbench.viewPrompts")}</Button>
+                                            <Button type="text" size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => setAssetPickerOpen(true)}>{t("workbench.viewAssets")}</Button>
                                         </div>
-                                        <div className="space-y-2 rounded-lg border border-dashed border-stone-300 p-2 dark:border-stone-700">
-                                            {items.map((item, index) => (
-                                                <div key={item.id} className="space-y-2">
-                                                    <div className="flex min-w-0 items-center gap-2">
-                                                        <span className="shrink-0 text-xs text-stone-500">{index + 1}</span>
-                                                        <span className="min-w-0 flex-1 truncate text-xs" title={item.url}>{item.name}</span>
-                                                        <Button type="text" size="small" icon={<Trash2 className="size-3.5" />} aria-label={t(`videoWorkbench.${kind === "video" ? "removeVideo" : "removeAudio"}`)} onClick={() => kind === "video" ? setReferenceVideos((value) => value.filter((ref) => ref.id !== item.id)) : setReferenceAudios((value) => value.filter((ref) => ref.id !== item.id))} />
-                                                    </div>
-                                                    {kind === "video" ? <video src={item.url} controls playsInline preload="none" className="max-h-36 w-full rounded object-contain" /> : <audio src={item.url} controls preload="none" className="h-8 w-full" />}
+                                    </div>
+                                </div>
+
+                                {creationMode === "frames" ? (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        {([{ kind: "firstFrame", image: firstFrame }, { kind: "lastFrame", image: lastFrame }] as const).map(({ kind, image }) => (
+                                            <div key={kind} className="min-w-0">
+                                                <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-1">
+                                                    <span className="text-sm font-medium">{t("videoWorkbench." + kind)}</span>
+                                                    <span className="text-xs" style={{ color: token.colorTextTertiary }}>{t("videoWorkbench." + kind + "Hint")}</span>
                                                 </div>
-                                            ))}
-                                            {!items.length ? <div className="py-3 text-center text-sm text-stone-500">{t(`videoWorkbench.${kind === "video" ? "noVideos" : "noAudio"}`)}</div> : null}
-                                        </div>
-                                        {kind === "audio" ? <Typography.Paragraph type="secondary" className="!mb-0 mt-2 !text-xs">{t("videoWorkbench.audioReferencesHint")}</Typography.Paragraph> : null}
+                                                <button type="button" onClick={() => openReferenceLinks(kind)} className="flex aspect-video w-full cursor-pointer flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-dashed transition hover:opacity-80" style={{ background: token.colorFillAlter, borderColor: token.colorBorder, color: token.colorTextSecondary }}>
+                                                    {image ? <img src={previewUrlFor(image.storageKey) || image.dataUrl} alt={t("videoWorkbench." + kind)} className="size-full object-contain" /> : <><Plus className="size-5" /><span className="text-xs">{t("videoWorkbench.addLink")}</span></>}
+                                                </button>
+                                                {image ? (
+                                                    <div className="mt-1.5 flex min-w-0 items-center gap-1">
+                                                        <span className="min-w-0 flex-1 truncate text-xs" style={{ color: token.colorTextTertiary }} title={image.name}>{image.name}</span>
+                                                        <Button type="text" size="small" icon={<Trash2 className="size-3.5" />} aria-label={t("videoWorkbench.removeImage")} onClick={() => kind === "firstFrame" ? setFirstFrame(null) : setLastFrame(null)} />
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        ))}
                                     </div>
-                                );
-                            })}
-                            {referenceVideos.length || referenceAudios.length ? <Typography.Paragraph type="secondary" className="!mb-0 !text-xs">{t("videoWorkbench.mediaReferenceModeHint")}</Typography.Paragraph> : null}
+                                ) : null}
 
-                            <div className="flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900 sm:hidden">
-                                <span className="truncate text-stone-500 dark:text-stone-400">
-                                    {modelOptionLabel(effectiveConfig, model)} · {normalizeResolution(effectiveConfig.vquality)}p · {videoSizeLabel(effectiveConfig.size)} · {normalizeVideoSeconds(effectiveConfig.videoSeconds)}s · {videoModeLabel(effectiveConfig.videoMode)}
-                                </span>
-                                <Button size="small" type="text" icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
-                                    {t("workbench.adjust")}
-                                </Button>
-                            </div>
+                                {creationMode === "reference" ? (
+                                    <div>
+                                        <div className="mb-2.5 text-xs font-semibold" style={{ color: token.colorTextSecondary }}>{t("videoWorkbench.referenceMaterials")}</div>
+                                        <Segmented block value={referenceMediaTab} onChange={(value) => setReferenceMediaTab(value as "image" | "video" | "audio")} options={([
+                                            { value: "image", count: references.length, limit: 30 },
+                                            { value: "video", count: referenceVideos.length, limit: 10 },
+                                            { value: "audio", count: referenceAudios.length, limit: 10 },
+                                        ] as const).map(({ value, count, limit }) => ({ value, label: t("videoWorkbench.referenceKinds." + value) + " " + count + "/" + limit }))} />
+                                        <div className="mt-3 overflow-hidden rounded-xl border" style={{ borderColor: token.colorBorderSecondary }}>
+                                            <div className="flex items-center justify-between border-b px-3 py-2" style={{ borderColor: token.colorBorderSecondary }}>
+                                                <span className="text-xs" style={{ color: token.colorTextSecondary }}>{t("videoWorkbench.referenceKinds." + referenceMediaTab)}</span>
+                                                <div className="flex gap-1">
+                                                    {referenceMediaTab === "image" ? (
+                                                        <Dropdown trigger={["click"]} menu={{ items: [
+                                                            { key: "clipboard", label: t("workbench.clipboard"), icon: <ClipboardPaste className="size-3.5" />, onClick: () => void addReferencesFromClipboard() },
+                                                            { key: "upload", label: t("workbench.upload"), icon: <Upload className="size-3.5" />, onClick: () => fileInputRef.current?.click() },
+                                                        ] }}>
+                                                            <Button type="text" size="small" icon={<MoreHorizontal className="size-4" />} aria-label={t("videoWorkbench.moreImageActions")} />
+                                                        </Dropdown>
+                                                    ) : null}
+                                                    <Button type="text" size="small" icon={<Link2 className="size-3.5" />} disabled={referenceMediaTab === "image" ? references.length >= 30 : referenceMediaTab === "video" ? referenceVideos.length >= 10 : referenceAudios.length >= 10} onClick={() => openReferenceLinks(referenceMediaTab)}>{t("videoWorkbench.addLink")}</Button>
+                                                </div>
+                                            </div>
+                                            <div
+                                                className="thin-scrollbar max-h-[360px] min-h-[160px] overflow-y-auto p-3"
+                                                style={{ background: referenceDragTarget ? token.colorFillAlter : undefined }}
+                                                onDragEnter={referenceMediaTab === "image" ? handleReferenceDragEnter : undefined}
+                                                onDragOver={referenceMediaTab === "image" ? (event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } : undefined}
+                                                onDragLeave={referenceMediaTab === "image" ? handleReferenceDragLeave : undefined}
+                                                onDrop={referenceMediaTab === "image" ? handleReferenceDrop : undefined}
+                                            >
+                                                {referenceMediaTab === "image" && references.length ? (
+                                                    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                                                        {references.map((item, index) => (
+                                                            <div key={item.id} className="group relative aspect-square overflow-hidden rounded-lg border" style={{ borderColor: token.colorBorderSecondary }}>
+                                                                <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} className="size-full object-cover" />
+                                                                <span className="absolute left-1 top-1 rounded px-1.5 py-0.5 text-[10px]" style={{ background: token.colorBgElevated, color: token.colorText }}>{index + 1}</span>
+                                                                <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
+                                                                <Button type="text" size="small" className="!absolute right-1 top-1" style={{ background: token.colorBgElevated, color: token.colorText }} icon={<Trash2 className="size-3.5" />} onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label={t("videoWorkbench.removeImage")} />
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : null}
+                                                {referenceMediaTab !== "image" ? (
+                                                    <div className="space-y-3">
+                                                        {(referenceMediaTab === "video" ? referenceVideos : referenceAudios).map((item, index) => (
+                                                            <div key={item.id} className="space-y-2">
+                                                                <div className="flex min-w-0 items-center gap-2">
+                                                                    <span className="shrink-0 text-xs" style={{ color: token.colorTextTertiary }}>{index + 1}</span>
+                                                                    <span className="min-w-0 flex-1 truncate text-xs" title={item.url}>{item.name}</span>
+                                                                    <Button type="text" size="small" icon={<Trash2 className="size-3.5" />} aria-label={t("videoWorkbench." + (referenceMediaTab === "video" ? "removeVideo" : "removeAudio"))} onClick={() => referenceMediaTab === "video" ? setReferenceVideos((value) => value.filter((ref) => ref.id !== item.id)) : setReferenceAudios((value) => value.filter((ref) => ref.id !== item.id))} />
+                                                                </div>
+                                                                {referenceMediaTab === "video" ? <video src={item.url} controls playsInline preload="none" className="max-h-40 w-full rounded-lg object-contain" /> : <audio src={item.url} controls preload="none" className="h-9 w-full" />}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : null}
+                                                {!(referenceMediaTab === "image" ? references.length : referenceMediaTab === "video" ? referenceVideos.length : referenceAudios.length) ? (
+                                                    <div className="flex min-h-32 flex-col items-center justify-center gap-3 text-center" style={{ color: token.colorTextTertiary }}>
+                                                        {referenceMediaTab === "image" ? <ImageIcon className="size-6" /> : referenceMediaTab === "video" ? <VideoIcon className="size-6" /> : <Music2 className="size-6" />}
+                                                        <p className="text-xs">{referenceDragTarget ? t("videoWorkbench.dropReferences") : t("videoWorkbench.referenceEmpty", { kind: t("videoWorkbench.referenceKinds." + referenceMediaTab) })}</p>
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        </div>
+                                        <p className="mt-2 text-xs leading-relaxed" style={{ color: token.colorTextTertiary }}>{t(referenceMediaTab === "audio" ? "videoWorkbench.audioReferencesHint" : "videoWorkbench.publicReferencesHint")}</p>
+                                    </div>
+                                ) : null}
 
-                            <div className="hidden gap-4 sm:grid sm:grid-cols-2">
-                                <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                                <details className="group rounded-xl border px-4 py-3.5" style={{ borderColor: token.colorBorderSecondary }}>
+                                    <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 text-xs [&::-webkit-details-marker]:hidden">
+                                        <span className="flex items-center gap-2 font-semibold"><SlidersHorizontal className="size-3.5" />{t("videoWorkbench.generationParameters")}</span>
+                                        <span className="flex items-center gap-2" style={{ color: token.colorTextTertiary }}>{normalizeResolution(effectiveConfig.vquality)}p · {videoSizeLabel(effectiveConfig.size)} · {normalizeVideoSeconds(effectiveConfig.videoSeconds)}s<ChevronDown className="size-3.5 transition-transform group-open:rotate-180" /></span>
+                                    </summary>
+                                    <div className="mt-4 border-t pt-5" style={{ borderColor: token.colorBorderSecondary }}>
+                                        <VideoSettingsPanel config={effectiveConfig} onConfigChange={(key, value) => updateConfig(key, value)} theme={canvasTheme} showTitle={false} showMode={false} className="space-y-5" />
+                                    </div>
+                                </details>
                             </div>
                         </div>
 
-                        <div className="mt-auto pt-6">
-                            <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} loading={running} disabled={!canGenerate || running} onClick={() => void generate()}>
-                                {t("workbench.generate")}
-                            </Button>
+                        <div className="shrink-0 border-t px-5 py-4 sm:px-7" style={{ borderColor: token.colorBorderSecondary }}>
+                            <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} loading={running} disabled={!canGenerate || running} onClick={() => void generate()}>{t("workbench.generate")}</Button>
                         </div>
-                    </div>
+                    </section>
 
-                    <div className="thin-scrollbar rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto lg:p-5">
-                        <div className="mb-4 flex items-center justify-between gap-3">
-                            <h2 className="text-xl font-semibold">{t("workbench.results")}</h2>
-                            {running ? <Tag className="m-0 px-2 py-1">{t("workbench.waiting", { time: formatDuration(elapsedMs) })}</Tag> : null}
+                    <aside className="thin-scrollbar flex min-w-0 flex-col rounded-2xl border p-5 sm:p-6 lg:min-h-0 lg:overflow-y-auto" style={{ background: token.colorBgContainer, borderColor: token.colorBorderSecondary }}>
+                        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                            <h2 className="text-base font-semibold">{t("workbench.results")}</h2>
+                            {running ? <Tag className="m-0">{t("workbench.waiting", { time: formatDuration(elapsedMs) })}</Tag> : null}
                         </div>
                         {results.length ? (
                             <div className="grid gap-4">
                                 {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <FailedVideoCard key={result.id} error={result.error || t("workbench.generationFailed")} canResume={result.canResume} queryPaused={result.queryPaused} disabled={running} onRetry={() => retryResult(result)} /> : <PendingVideoCard key={result.id} />))}
                             </div>
                         ) : (
-                            <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-stone-300 text-center dark:border-stone-700 lg:min-h-[560px]">
-                                <VideoIcon className="mb-4 size-11 text-stone-400" />
+                            <div className="flex min-h-[320px] flex-1 flex-col items-center justify-center rounded-xl border border-dashed" style={{ borderColor: token.colorBorderSecondary, color: token.colorTextTertiary }}>
+                                <VideoIcon className="mb-4 size-10 opacity-50" />
                                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("videoWorkbench.empty")} />
                             </div>
                         )}
-                    </div>
-                </section>
-            </main>
-            <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(event) => {
-                    void addReferences(event.target.files);
-                    event.target.value = "";
-                }}
-            />
-            <Drawer title={t("workbench.logs")} placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
-                <LogPanel logs={logs} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={() => setDeleteConfirmOpen(true)} onPreviewLog={previewGenerationLog} />
-            </Drawer>
-            <Drawer title={t("workbench.settings")} placement="bottom" height="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
-                <div className="grid grid-cols-2 gap-3 pb-4">
-                    <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                    </aside>
                 </div>
+            </main>
+            <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { void addReferences(event.target.files); event.target.value = ""; }} />
+            <Drawer title={t("workbench.logs")} placement="right" size={380} open={logsOpen} onClose={() => setLogsOpen(false)}>
+                <LogPanel logs={logs} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={() => setDeleteConfirmOpen(true)} onPreviewLog={previewGenerationLog} />
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
             <Modal title={t("videoWorkbench.addReferenceLinks", { kind: referenceLinkLabel })} open={referenceLinkKind !== null} onCancel={() => setReferenceLinkKind(null)} onOk={addReferenceLinks} okText={t("common.add")} cancelText={t("common.cancel")}>
                 <Typography.Paragraph type="secondary">{t("videoWorkbench.referenceLinksHint", { limit: referenceLinkLimit })}</Typography.Paragraph>
                 {referenceLinkKind === "audio" ? <Typography.Paragraph type="secondary">{t("videoWorkbench.audioReferencesHint")}</Typography.Paragraph> : null}
-                <Input.TextArea value={referenceLinks} onChange={(event) => setReferenceLinks(event.target.value)} rows={5} placeholder={`https://example.com/ref-1.${referenceLinkKind === "video" ? "mp4" : referenceLinkKind === "audio" ? "mp3" : "png"}`} />
+                <Input.TextArea value={referenceLinks} onChange={(event) => setReferenceLinks(event.target.value)} rows={referenceLinkLimit === 1 ? 2 : 5} placeholder={"https://example.com/ref-1." + (referenceLinkKind === "video" ? "mp4" : referenceLinkKind === "audio" ? "mp3" : "png")} />
             </Modal>
             <Modal title={t("workbench.deleteLogs")} open={deleteConfirmOpen} onCancel={() => setDeleteConfirmOpen(false)} onOk={deleteSelectedLogs} okText={t("common.delete")} okButtonProps={{ danger: true }} cancelText={t("common.cancel")}>
                 {t("workbench.deleteLogsConfirm", { count: selectedLogIds.length })}
@@ -609,24 +663,6 @@ export default function VideoPage() {
         </div>
     );
 }
-
-function GenerationSettings({ config, model, updateConfig, openConfigDialog }: { config: AiConfig; model: string; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void }) {
-    const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const { t } = useTranslation();
-
-    return (
-        <>
-            <label className="col-span-2 block min-w-0 sm:col-span-1">
-                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">{t("workbench.model")}</span>
-                <ModelPicker config={config} value={model} onChange={(value) => updateConfig("videoModel", value)} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
-            </label>
-            <div className="col-span-2">
-                <VideoSettingsPanel config={config} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" />
-            </div>
-        </>
-    );
-}
-
 function ResultVideoCard({ video, onDownload, onSaveAsset }: { video: GeneratedVideo; onDownload: (video: GeneratedVideo) => void; onSaveAsset: (video: GeneratedVideo) => void }) {
     const { t } = useTranslation();
     return (
@@ -789,6 +825,7 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         time: log.time || new Date().toLocaleString(i18n.resolvedLanguage, { hour12: false }),
         model: log.model || config.videoModel || "",
         config,
+        creationMode: log.creationMode || (log.videos?.length || log.audios?.length || references.length > 2 || config.videoMode === "reference" ? "reference" : references.length ? "frames" : "text"),
         references,
         videos: log.videos || [],
         audios: log.audios || [],
@@ -820,11 +857,12 @@ function moveListItem<T>(items: T[], index: number, offset: number) {
 }
 
 function ReferenceOrderButtons({ index, total, onMove }: { index: number; total: number; onMove: (offset: number) => void }) {
+    const { token } = antdTheme.useToken();
     if (total <= 1) return null;
     return (
         <div className="absolute inset-x-1 bottom-1 flex justify-between">
-            <Button size="small" className="!h-6 !w-6 !min-w-6 !rounded-full !bg-white/85 !p-0 !shadow-sm" icon={<ArrowLeft className="size-3" />} disabled={index <= 0} onClick={() => onMove(-1)} />
-            <Button size="small" className="!h-6 !w-6 !min-w-6 !rounded-full !bg-white/85 !p-0 !shadow-sm" icon={<ArrowRight className="size-3" />} disabled={index >= total - 1} onClick={() => onMove(1)} />
+            <Button size="small" className="!h-6 !w-6 !min-w-6 !rounded-full !p-0" style={{ background: token.colorBgElevated }} icon={<ArrowLeft className="size-3" />} disabled={index <= 0} onClick={() => onMove(-1)} />
+            <Button size="small" className="!h-6 !w-6 !min-w-6 !rounded-full !p-0" style={{ background: token.colorBgElevated }} icon={<ArrowRight className="size-3" />} disabled={index >= total - 1} onClick={() => onMove(1)} />
         </div>
     );
 }
@@ -842,7 +880,7 @@ function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
     };
 }
 
-function buildLog({ prompt, model, config, references, videos, audios, durationMs, status, task, video, error }: { prompt: string; model: string; config: AiConfig; references: ReferenceImage[]; videos: ReferenceVideo[]; audios: ReferenceAudio[]; durationMs: number; status: GenerationLog["status"]; task?: VideoGenerationTask; video?: GeneratedVideo; error?: string }): GenerationLog {
+function buildLog({ prompt, model, config, creationMode, references, videos, audios, durationMs, status, task, video, error }: { prompt: string; model: string; config: AiConfig; creationMode: CreationMode; references: ReferenceImage[]; videos: ReferenceVideo[]; audios: ReferenceAudio[]; durationMs: number; status: GenerationLog["status"]; task?: VideoGenerationTask; video?: GeneratedVideo; error?: string }): GenerationLog {
     const logConfig = {
         model: config.model,
         videoModel: config.videoModel,
@@ -861,6 +899,7 @@ function buildLog({ prompt, model, config, references, videos, audios, durationM
         time: new Date().toLocaleString(i18n.resolvedLanguage, { hour12: false }),
         model,
         config: logConfig,
+        creationMode,
         references,
         videos,
         audios,
