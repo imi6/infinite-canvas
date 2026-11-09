@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Bot, Download, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, Undo2, Upload } from "lucide-react";
-import { Button, Dropdown, Modal, Tooltip } from "antd";
+import { BookOpen, Bot, Download, Home, Images, Link2, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, Undo2, Upload } from "lucide-react";
+import { App, Button, Dropdown, Input, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { UserStatusActions } from "@/components/layout/user-status-actions";
@@ -25,6 +25,7 @@ export function CanvasTopBar({
     onDeleteProject,
     onExportProject,
     onImportImage,
+    onImportImageLink,
     onOpenPlugins,
     onUndo,
     onRedo,
@@ -47,6 +48,7 @@ export function CanvasTopBar({
     onDeleteProject: () => void;
     onExportProject: () => void;
     onImportImage: () => void;
+    onImportImageLink: (url: string) => Promise<void>;
     onOpenPlugins: () => void;
     onUndo: () => void;
     onRedo: () => void;
@@ -56,11 +58,36 @@ export function CanvasTopBar({
 }) {
     const colorTheme = useThemeStore((state) => state.theme);
     const { t } = useTranslation();
+    const { message } = App.useApp();
     const theme = canvasThemes[colorTheme];
     const titleRef = useRef<HTMLDivElement>(null);
     const [shortcutsOpen, setShortcutsOpen] = useState(false);
+    const [imageLinkOpen, setImageLinkOpen] = useState(false);
+    const [imageLink, setImageLink] = useState("");
+    const [importingImageLink, setImportingImageLink] = useState(false);
     const sidePanelOpen = useCanvasSidePanelStore((state) => state.panelOpen);
     const toggleSidePanel = useCanvasSidePanelStore((state) => state.togglePanel);
+
+    const importImageLink = async () => {
+        if (importingImageLink) return;
+        const url = imageLink.trim();
+        try {
+            if (!["https:", "http:"].includes(new URL(url).protocol)) throw new Error();
+        } catch {
+            message.error(t("canvas.imageLinkInvalid"));
+            return;
+        }
+        setImportingImageLink(true);
+        try {
+            await onImportImageLink(url);
+            setImageLinkOpen(false);
+            setImageLink("");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("common.imageReadFailed"));
+        } finally {
+            setImportingImageLink(false);
+        }
+    };
 
     useEffect(() => {
         if (!isTitleEditing) return;
@@ -98,6 +125,7 @@ export function CanvasTopBar({
                                 { key: "delete", danger: true, icon: <Trash2 className="size-4" />, label: t("canvas.deleteCurrent"), onClick: onDeleteProject },
                                 { type: "divider" },
                                 { key: "import", icon: <Upload className="size-4" />, label: t("canvas.importAsset"), onClick: onImportImage },
+                                { key: "image-link", icon: <Link2 className="size-4" />, label: t("canvas.addImageLink"), onClick: () => setImageLinkOpen(true) },
                                 { key: "export", icon: <Download className="size-4" />, label: t("canvas.exportCurrent"), onClick: onExportProject },
                                 { type: "divider" },
                                 { key: "undo", disabled: !canUndo, icon: <Undo2 className="size-4" />, label: <MenuLabel text={t("canvas.undo")} shortcut="⌘ Z" />, onClick: onUndo },
@@ -152,6 +180,12 @@ export function CanvasTopBar({
                     </Button>
                 </div>
             </div>
+            <Modal title={t("canvas.addImageLink")} open={imageLinkOpen} onCancel={() => setImageLinkOpen(false)} onOk={() => void importImageLink()} okText={t("common.add")} confirmLoading={importingImageLink} cancelButtonProps={{ disabled: importingImageLink }} closable={!importingImageLink} maskClosable={!importingImageLink} keyboard={!importingImageLink} centered>
+                <div className="space-y-3 py-2">
+                    <Input value={imageLink} onChange={(event) => setImageLink(event.target.value)} onPressEnter={() => void importImageLink()} placeholder="https://" aria-label={t("canvas.addImageLink")} disabled={importingImageLink} />
+                    <p className="text-xs leading-relaxed" style={{ color: theme.node.muted }}>{t("canvas.imageLinkHint")}</p>
+                </div>
+            </Modal>
             <Modal title={t("canvas.shortcuts")} open={shortcutsOpen} onCancel={() => setShortcutsOpen(false)} footer={null} centered>
                 <div className="space-y-2 border-t pt-4 text-sm" style={{ borderColor: theme.node.stroke }}>
                     <Shortcut keys={["Ctrl / Space", t("canvas.shortcut.drag")]} value={t("canvas.shortcut.toggleTool")} />

@@ -27,6 +27,7 @@ import i18n from "@/i18n";
 type GeneratedImage = {
     id: string;
     dataUrl: string;
+    sourceUrl?: string;
     storageKey?: string;
     durationMs: number;
     width: number;
@@ -241,7 +242,7 @@ export default function ImagePage() {
 
     const addResultToReferences = async (image: GeneratedImage, index: number) => {
         const stored = await uploadImage(image.dataUrl);
-        setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
+        setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, url: image.sourceUrl || stored.sourceUrl, storageKey: stored.storageKey }]);
         message.success(t("imageWorkbench.addedReference"));
     };
 
@@ -253,7 +254,7 @@ export default function ImagePage() {
             coverUrl: stored.url,
             tags: [],
             source: t("imageWorkbench.source"),
-            data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
+            data: { dataUrl: stored.url, sourceUrl: image.sourceUrl || stored.sourceUrl, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
             metadata: { source: "image-page", prompt },
         });
         message.success(t("common.addedToAssets"));
@@ -264,7 +265,7 @@ export default function ImagePage() {
             setPrompt(payload.content);
         } else if (payload.kind === "image") {
             const stored = await uploadImage(payload.dataUrl);
-            setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
+            setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, url: payload.sourceUrl || stored.sourceUrl, storageKey: stored.storageKey }]);
         } else {
             message.warning(t("imageWorkbench.unsupportedAsset"));
         }
@@ -331,7 +332,7 @@ export default function ImagePage() {
             const image = result[0];
             if (!image) throw new Error(t("imageWorkbench.missingResult"));
             const stored = await uploadImage(image.dataUrl);
-            const nextImage: GeneratedImage = { id: image.id, dataUrl: stored.url, ...(stored.storageKey ? { storageKey: stored.storageKey } : {}), durationMs: performance.now() - itemStartedAt, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
+            const nextImage: GeneratedImage = { id: image.id, dataUrl: stored.url, sourceUrl: stored.sourceUrl, ...(stored.storageKey ? { storageKey: stored.storageKey } : {}), durationMs: performance.now() - itemStartedAt, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
             setResults((value) => updateResultAt(value, index, { status: "success", image: nextImage }));
             return nextImage;
         } catch (error) {

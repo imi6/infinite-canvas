@@ -11,8 +11,15 @@ import { JSON_VIDEO_SCRIPT_MARKER, runModelPlugin } from "./model-plugin";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
-type VideoResponse = { id: string; status?: string; error?: { message?: string } | string };
-type ApiVideoResponse = VideoResponse | { code?: number | string; data?: VideoResponse | null; msg?: string; message?: string; error?: { message?: string } };
+type VideoResponse = {
+    id?: string; task_id?: string; request_id?: string;
+    status?: string; state?: string;
+    error?: { message?: string } | string; fail_reason?: string;
+    url?: string; video_url?: string;
+    video?: { url?: string }; content?: { video_url?: string }; output?: { url?: string };
+    msg?: string; message?: string;
+};
+type ApiVideoResponse = VideoResponse & { code?: number | string; data?: VideoResponse | null };
 type ApiEnvelope<T> = T | { code?: number | string; data?: T | null; msg?: string; message?: string; error?: { message?: string } };
 type RequestOptions = { signal?: AbortSignal };
 type VideoMediaOptions = RequestOptions & { videos?: ReferenceVideo[]; audios?: ReferenceAudio[] };
@@ -198,12 +205,20 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
     try {
         const taskId = encodeURIComponent(task.id);
         const video = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${taskId}`), { headers: aiHeaders(config), signal: options?.signal })).data);
-        if (video.status === "completed") {
-            const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${taskId}/content`), { headers: aiHeaders(config), responseType: "blob", signal: options?.signal });
-            await assertVideoBlob(content.data);
-            return { status: "completed", result: { blob: content.data } };
+        if (["completed", "succeeded", "success", "done"].includes(video.status)) {
+            let content: Blob;
+            try {
+                content = (await axios.get<Blob>(aiApiUrl(config, `/videos/${taskId}/content`), { headers: aiHeaders(config), responseType: "blob", signal: options?.signal })).data;
+            } catch (error) {
+                if (!axios.isAxiosError(error) || error.response?.status !== 404) throw error;
+                if (!isPublicMediaUrl(video.resultUrl)) throw new Error(apiText("noPlayableVideo"));
+                // 外部结果链接保留完整签名参数，并且不携带本站 API 密钥。
+                content = (await axios.get<Blob>(withLocalProxy(video.resultUrl), { responseType: "blob", signal: options?.signal })).data;
+            }
+            await assertVideoBlob(content);
+            return { status: "completed", result: { blob: content } };
         }
-        if (video.status === "failed" || video.status === "cancelled") return { status: "failed", error: readApiErrorMessage(video.error) || apiText("videoGenerationFailed") };
+        if (["failed", "error", "cancelled", "canceled", "expired"].includes(video.status)) return { status: "failed", error: video.error || apiText("videoGenerationFailed") };
         return { status: "pending" };
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("videoTaskQueryFailed")));
@@ -346,7 +361,16 @@ function normalizeVideoResolution(value: string) {
 }
 
 function unwrapVideoResponse(payload: ApiVideoResponse) {
-    return unwrapEnvelope(payload, apiText("noVideoTask"));
+    if (!payload || typeof payload !== "object") throw new Error(apiText("noVideoTask"));
+    if (payload.code !== undefined && payload.code !== 0 && payload.code !== "0") throw new Error(readApiErrorMessage(payload) || apiText("requestFailed"));
+    const sources = [payload, payload.data].filter((value): value is VideoResponse => Boolean(value) && typeof value === "object");
+    const text = (...values: unknown[]) => values.find((value): value is string => typeof value === "string" && Boolean(value.trim())) || "";
+    return {
+        id: text(...sources.flatMap((value) => [value.id, value.task_id, value.request_id])),
+        status: text(...sources.flatMap((value) => [value.status, value.state])).trim().toLowerCase(),
+        resultUrl: text(...sources.flatMap((value) => [value.url, value.video?.url, value.content?.video_url, value.output?.url, value.video_url])),
+        error: sources.map((value) => readApiErrorMessage(value.fail_reason) || readApiErrorMessage(value.error)).find(Boolean) || sources.map(readApiErrorMessage).find(Boolean) || "",
+    };
 }
 
 function unwrapEnvelope<T>(payload: ApiEnvelope<T>, emptyMessage: string): T {
@@ -373,13 +397,14 @@ function readApiErrorMessage(value: unknown): string {
         }
     }
     if (typeof value !== "object") return "";
-    const payload = value as { msg?: unknown; message?: unknown; error?: unknown; detail?: unknown };
+    const payload = value as { msg?: unknown; message?: unknown; error?: unknown; detail?: unknown; fail_reason?: unknown };
     // error may be a string or an object containing a message.
     const errorMsg =
         typeof payload.error === "string"
             ? payload.error
             : (payload.error as { message?: unknown })?.message;
     return (
+        readApiErrorMessage(payload.fail_reason) ||
         readApiErrorMessage(payload.msg) ||
         readApiErrorMessage(payload.message) ||
         readApiErrorMessage(errorMsg) ||

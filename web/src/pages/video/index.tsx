@@ -339,7 +339,7 @@ export default function VideoPage() {
             setPrompt(payload.content);
         } else if (payload.kind === "image") {
             const stored = await uploadImage(payload.dataUrl);
-            const image = { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey, url: /^https?:\/\//i.test(payload.dataUrl) ? payload.dataUrl : undefined };
+            const image = { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey, url: payload.sourceUrl || stored.sourceUrl };
             if (creationMode === "frames") {
                 if (!firstFrame) setFirstFrame(image);
                 else setLastFrame(image);

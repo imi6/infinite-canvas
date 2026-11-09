@@ -519,8 +519,14 @@ async function generateVideo({
     headers: { ...headers, "Content-Type": "application/json" },
     data: body,
   });
-  if (!task.id) throw new Error("视频接口未返回任务 ID");
-  return { taskId: String(task.id) };
+  if (!task || typeof task !== "object") throw new Error("视频接口未返回任务 ID");
+  if (task.code !== undefined && task.code !== 0 && task.code !== "0") {
+    throw new Error(task.error?.message || task.message || task.msg || "视频任务提交失败");
+  }
+  const taskId = [task.id, task.task_id, task.request_id, task.data?.id, task.data?.task_id, task.data?.request_id]
+    .find((value) => typeof value === "string" && value.trim());
+  if (!taskId) throw new Error("视频接口未返回任务 ID");
+  return { taskId };
 }
 
 return await generateVideo({

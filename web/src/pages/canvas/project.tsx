@@ -1743,6 +1743,7 @@ function InfiniteCanvasPage() {
                     metadata: {
                         ...node.metadata,
                         content: image.content,
+                        sourceUrl: image.sourceUrl,
                         storageKey: image.storageKey,
                         naturalWidth: image.naturalWidth,
                         naturalHeight: image.naturalHeight,
@@ -1769,6 +1770,7 @@ function InfiniteCanvasPage() {
             ...size,
             metadata: {
                 content: image.content,
+                sourceUrl: image.sourceUrl,
                 storageKey: image.storageKey,
                 naturalWidth: image.naturalWidth,
                 naturalHeight: image.naturalHeight,
@@ -1876,6 +1878,7 @@ function InfiniteCanvasPage() {
                 source: "Canvas",
                 data: {
                     dataUrl,
+                    sourceUrl: node.metadata.sourceUrl,
                     storageKey: node.metadata.storageKey,
                     width: node.metadata.naturalWidth || node.width,
                     height: node.metadata.naturalHeight || node.height,
@@ -2441,7 +2444,7 @@ function InfiniteCanvasPage() {
                                             width: rootNode.width,
                                             height: rootNode.height,
                                             title: rootNode.title,
-                                            metadata: { ...node.metadata, ...rootNode.metadata, content: undefined, storageKey: undefined, naturalWidth: undefined, naturalHeight: undefined, bytes: undefined, mimeType: undefined, errorDetails: undefined },
+                                            metadata: { ...node.metadata, ...rootNode.metadata, content: undefined, sourceUrl: undefined, storageKey: undefined, naturalWidth: undefined, naturalHeight: undefined, bytes: undefined, mimeType: undefined, errorDetails: undefined },
                                         }
                                       : isImageNode
                                         ? {
@@ -2477,7 +2480,7 @@ function InfiniteCanvasPage() {
                                     : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal }).then((items) => items[0]);
                                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                                 const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
-                                const item: CanvasNodeImage = { id: imageId, status: NODE_STATUS_SUCCESS, content: uploaded.url, storageKey: uploaded.storageKey, naturalWidth: uploaded.width, naturalHeight: uploaded.height, bytes: uploaded.bytes, mimeType: uploaded.mimeType };
+                                const item: CanvasNodeImage = { id: imageId, status: NODE_STATUS_SUCCESS, content: uploaded.url, sourceUrl: uploaded.sourceUrl, storageKey: uploaded.storageKey, naturalWidth: uploaded.width, naturalHeight: uploaded.height, bytes: uploaded.bytes, mimeType: uploaded.mimeType };
                                 setNodes((prev) =>
                                     prev.map((node) => {
                                         if (node.id !== rootId) return node;
@@ -2491,6 +2494,7 @@ function InfiniteCanvasPage() {
                                             metadata: {
                                                 ...node.metadata,
                                                 content: item.content,
+                                                sourceUrl: item.sourceUrl,
                                                 storageKey: item.storageKey,
                                                 naturalWidth: item.naturalWidth,
                                                 naturalHeight: item.naturalHeight,
@@ -2853,6 +2857,7 @@ function InfiniteCanvasPage() {
                     id: imageId || node.metadata?.primaryImageId || nanoid(),
                     status: NODE_STATUS_SUCCESS,
                     content: uploadedImage.url,
+                    sourceUrl: uploadedImage.sourceUrl,
                     storageKey: uploadedImage.storageKey,
                     naturalWidth: uploadedImage.width,
                     naturalHeight: uploadedImage.height,
@@ -2926,7 +2931,8 @@ function InfiniteCanvasPage() {
             prev.map((item) => {
                 if (item.id !== nodeId) return item;
                 const images = item.metadata?.images?.filter((image) => image.id !== imageId) || [];
-                return { ...item, metadata: { ...item.metadata, images, count: images.length, primaryImageId: item.metadata?.primaryImageId === imageId ? images[0]?.id : item.metadata?.primaryImageId } };
+                const primary = item.metadata?.primaryImageId === imageId ? images.find((image) => image.content) || images[0] : undefined;
+                return { ...item, metadata: { ...item.metadata, ...(item.metadata?.primaryImageId === imageId ? { content: primary?.content, sourceUrl: primary?.sourceUrl, storageKey: primary?.storageKey, naturalWidth: primary?.naturalWidth, naturalHeight: primary?.naturalHeight, bytes: primary?.bytes, mimeType: primary?.mimeType, primaryImageId: primary?.id } : {}), images, count: images.length } };
             }),
         );
     }, []);
@@ -2972,7 +2978,7 @@ function InfiniteCanvasPage() {
 
     const insertAssistantImage = useCallback(
         async (image: CanvasAssistantImage) => {
-            const storedImage = image.storageKey ? { url: image.dataUrl, storageKey: image.storageKey, width: 1, height: 1, bytes: 0, mimeType: "image/png" } : await uploadImage(image.dataUrl);
+            const storedImage = image.storageKey ? { url: image.dataUrl, sourceUrl: image.sourceUrl, storageKey: image.storageKey, width: 1, height: 1, bytes: 0, mimeType: "image/png" } : { ...await uploadImage(image.dataUrl), ...(image.sourceUrl ? { sourceUrl: image.sourceUrl } : {}) };
             await ensureImagePreview(storedImage.storageKey);
             const meta = storedImage.width === 1 && storedImage.height === 1 ? await readImageMeta(storedImage.url) : storedImage;
             const config = fitNodeSize(meta.width, meta.height);
@@ -3034,7 +3040,7 @@ function InfiniteCanvasPage() {
                 ]);
                 setSelectedNodeIds(new Set([id]));
             } else {
-                insertAssistantImage({ id: `asset-${Date.now()}`, prompt: payload.title, dataUrl: payload.dataUrl, storageKey: payload.storageKey });
+                insertAssistantImage({ id: `asset-${Date.now()}`, prompt: payload.title, dataUrl: payload.dataUrl, sourceUrl: payload.sourceUrl, storageKey: payload.storageKey });
             }
             setAssetPickerOpen(false);
         },
@@ -3173,6 +3179,7 @@ function InfiniteCanvasPage() {
                     onDeleteProject={deleteCurrentProject}
                     onExportProject={exportCurrentProject}
                     onImportImage={() => handleUploadRequest()}
+                    onImportImageLink={(url) => insertAssistantImage({ id: nanoid(), prompt: t("canvas.linkedImage"), dataUrl: url })}
                     onOpenPlugins={() => setPluginManagerOpen(true)}
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}

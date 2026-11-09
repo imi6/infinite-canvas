@@ -7,6 +7,7 @@ import { createImageThumbnail } from "@/lib/image-thumbnail";
 
 export type UploadedImage = {
     url: string;
+    sourceUrl?: string;
     storageKey?: string;
     width: number;
     height: number;
@@ -44,9 +45,9 @@ export async function uploadImage(input: string | Blob, options?: ImageReadOptio
         if (options?.signal?.aborted || isNamedError(error, IMAGE_RESPONSE_ERROR) || isNamedError(error, IMAGE_TIMEOUT_ERROR) || !/^https?:\/\//i.test(input)) throw error;
         const meta = await loadImageMeta(input, options, IMAGE_REMOTE_LOAD_TIMEOUT_MS);
         if (!meta) throw error;
-        return { url: input, width: meta.width, height: meta.height, bytes: 0, mimeType: "" };
+        return { url: input, sourceUrl: input, width: meta.width, height: meta.height, bytes: 0, mimeType: "" };
     }
-    return storeImage(blob, options);
+    return { ...await storeImage(blob, options), sourceUrl: /^https?:\/\//i.test(input) ? input : undefined };
 }
 
 async function storeImage(blob: Blob, options?: ImageReadOptions): Promise<UploadedImage> {

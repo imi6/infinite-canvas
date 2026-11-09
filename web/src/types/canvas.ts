@@ -30,6 +30,7 @@ export type CanvasNodeImage = {
     status: CanvasNodeStatus;
     errorDetails?: string;
     content: string;
+    sourceUrl?: string;
     storageKey?: string;
     naturalWidth: number;
     naturalHeight: number;
@@ -46,6 +47,7 @@ export type CanvasNodeText = {
 
 export type CanvasNodeMetadata = {
     content?: string;
+    sourceUrl?: string;
     composerContent?: string;
     prompt?: string;
     status?: CanvasNodeStatus;
@@ -115,6 +117,7 @@ export type CanvasAssistantReference = {
 export type CanvasAssistantImage = {
     id: string;
     dataUrl: string;
+    sourceUrl?: string;
     storageKey?: string;
     prompt: string;
 };
