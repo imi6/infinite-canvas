@@ -164,6 +164,39 @@ export default {
     },
     imageWorkbench: {
         title: "Image Studio",
+        notice: {
+            title: "Before you start creating",
+            badge: "Image Studio",
+            description: "Please read the following information before creating to help avoid failed generations or lost work.",
+            items: {
+                safety: {
+                    title: "1. Content safety checks",
+                    body: "Cloud model providers check prompts, reference assets and generated content for safety. Requests involving prohibited, sensitive or restricted content may be blocked. A content moderation or safety policy error usually does not mean this site is unavailable. Adjust your prompt before trying again.",
+                },
+                saving: {
+                    title: "2. Save your work promptly",
+                    body: "Creation records are stored in this browser. Image links may expire and are not a permanent backup, so download your work promptly. Clearing browser data, using private browsing or switching devices can still cause records to be lost.",
+                },
+                limits: {
+                    title: "3. Size and quality limits",
+                    body: "Image dimensions, aspect ratio and resolution depend on the selected cloud model. Some models do not support custom dimensions or ratios and may use default settings, resize or crop the output.",
+                },
+                privacy: {
+                    title: "4. Privacy and content rights",
+                    body: "Prompts and reference images are sent to the selected cloud model provider. Do not publicly share private assets or upload identity documents, account passwords, trade secrets or other sensitive information. Ensure you have the rights to use the assets, likenesses and content you provide.",
+                },
+                submission: {
+                    title: "5. Avoid duplicate submissions",
+                    body: "Generation can take time. Avoid refreshing or closing the page, and do not click Generate repeatedly, as this may create duplicate requests or charges.",
+                },
+            },
+            agreement: "Continuing confirms that you understand this information and agree to follow the relevant model providers' usage rules.",
+            snooze: "Do not show again for 7 days",
+            later: "Not now",
+            continue: "I understand, start creating",
+            open: "Creation notice",
+            cancelled: "The user chose not to use Image Studio",
+        },
         promptPlaceholder: "Describe the subject, style, composition, lighting, and intended use",
         references: "Reference images",
         removeReference: "Remove reference image",

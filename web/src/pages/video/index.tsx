@@ -24,7 +24,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 import i18n from "@/i18n";
-import { isVideoNoticeSnoozed, VideoCreationNotice } from "./creation-notice";
+import { isCreationNoticeSnoozed, WorkbenchCreationNotice } from "@/components/workbench-creation-notice";
 
 type GeneratedVideo = {
     id: string;
@@ -92,7 +92,7 @@ export default function VideoPage() {
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
     const [prompt, setPrompt] = useState("");
-    const [noticeAccepted, setNoticeAccepted] = useState(isVideoNoticeSnoozed);
+    const [noticeAccepted, setNoticeAccepted] = useState(() => isCreationNoticeSnoozed("video"));
     const [noticeOpen, setNoticeOpen] = useState(false);
     const [creationMode, setCreationMode] = useState<CreationMode>("text");
     const [firstFrame, setFirstFrame] = useState<ReferenceImage | null>(null);
@@ -666,7 +666,7 @@ export default function VideoPage() {
                 <LogPanel logs={logs} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={() => setDeleteConfirmOpen(true)} onPreviewLog={previewGenerationLog} />
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
-            <VideoCreationNotice open={!noticeAccepted || noticeOpen} onContinue={() => { setNoticeAccepted(true); setNoticeOpen(false); }} onCancel={declineCreation} />
+            <WorkbenchCreationNotice kind="video" open={!noticeAccepted || noticeOpen} onContinue={() => { setNoticeAccepted(true); setNoticeOpen(false); }} onCancel={declineCreation} />
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
             <Modal title={t("videoWorkbench.addReferenceLinks", { kind: referenceLinkLabel })} open={referenceLinkKind !== null} onCancel={() => setReferenceLinkKind(null)} onOk={addReferenceLinks} okText={t("common.add")} cancelText={t("common.cancel")}>
                 <Typography.Paragraph type="secondary">{t("videoWorkbench.referenceLinksHint", { limit: referenceLinkLimit })}</Typography.Paragraph>

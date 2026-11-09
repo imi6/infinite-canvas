@@ -1,12 +1,14 @@
-import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, CircleAlert, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Tooltip, Typography } from "antd";
 import localforage from "localforage";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import { ImageSettingsPanel } from "@/components/image-settings-panel";
 import { ModelPicker } from "@/components/model-picker";
+import { isCreationNoticeSnoozed, WorkbenchCreationNotice } from "@/components/workbench-creation-notice";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -70,6 +72,7 @@ const logStore = localforage.createInstance({ name: "infinite-canvas", storeName
 export default function ImagePage() {
     const { message } = App.useApp();
     const { t } = useTranslation();
+    const navigate = useNavigate();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
@@ -80,6 +83,8 @@ export default function ImagePage() {
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
     const [prompt, setPrompt] = useState("");
+    const [noticeAccepted, setNoticeAccepted] = useState(() => isCreationNoticeSnoozed("image"));
+    const [noticeOpen, setNoticeOpen] = useState(false);
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
     const [logs, setLogs] = useState<GenerationLog[]>([]);
@@ -148,6 +153,7 @@ export default function ImagePage() {
     };
 
     const generate = async () => {
+        if (!noticeAccepted) return;
         const agentTaskId = agentTaskIdRef.current;
         agentTaskIdRef.current = undefined;
         const text = prompt.trim();
@@ -209,7 +215,7 @@ export default function ImagePage() {
 
     // Handle image-generation commands from the Agent panel by setting the prompt and optionally starting generation.
     useEffect(() => {
-        if (!imageCommand || imageCommand.nonce === processedCommandRef.current) return;
+        if (!noticeAccepted || !imageCommand || imageCommand.nonce === processedCommandRef.current) return;
         processedCommandRef.current = imageCommand.nonce;
         clearImageCommand();
         if (typeof imageCommand.prompt === "string") setPrompt(imageCommand.prompt);
@@ -221,13 +227,13 @@ export default function ImagePage() {
             agentTaskIdRef.current = imageCommand.taskId;
             setAutoRunToken((value) => value + 1);
         }
-    }, [imageCommand, clearImageCommand, running, updateAgentTask]);
+    }, [noticeAccepted, imageCommand, clearImageCommand, running, updateAgentTask]);
 
     useEffect(() => {
-        if (!autoRunToken) return;
+        if (!autoRunToken || !noticeAccepted) return;
         void generate();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [autoRunToken]);
+    }, [autoRunToken, noticeAccepted]);
 
     const downloadImage = (image: GeneratedImage, index: number) => {
         saveAs(image.dataUrl, `image-${index + 1}.png`);
@@ -335,6 +341,7 @@ export default function ImagePage() {
     };
 
     const retryResult = async (index: number) => {
+        if (!noticeAccepted) return;
         const snapshot = buildRequestSnapshot();
         if (!snapshot) return;
         setPreviewLog(null);
@@ -361,6 +368,14 @@ export default function ImagePage() {
         }
     };
 
+    const declineCreation = () => {
+        const taskId = agentTaskIdRef.current || (imageCommand?.run ? imageCommand.taskId : undefined);
+        if (taskId) updateAgentTask(taskId, { status: "failed", error: t("imageWorkbench.notice.cancelled") });
+        agentTaskIdRef.current = undefined;
+        clearImageCommand();
+        navigate("/", { replace: true });
+    };
+
     return (
         <div className="flex h-full flex-col overflow-hidden bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-100">
             <main className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-3 lg:grid-cols-[300px_minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[320px_minmax(0,1fr)]">
@@ -379,17 +394,20 @@ export default function ImagePage() {
                 <section className="grid gap-3 lg:min-h-0 lg:overflow-hidden xl:grid-cols-[420px_minmax(0,1fr)]">
                     <div className="thin-scrollbar flex flex-col rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto">
                         <div>
-                            <div className="flex items-start justify-between gap-3">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
                                 <div className="min-w-0">
                                     <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{t("imageWorkbench.title")}</h1>
                                 </div>
-                                <div className="flex shrink-0 gap-2 lg:hidden">
-                                    <Button icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>
-                                        {t("workbench.logs")}
-                                    </Button>
-                                    <Button icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
-                                        {t("workbench.settings")}
-                                    </Button>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Button type="text" size="small" icon={<CircleAlert className="size-3.5" />} onClick={() => setNoticeOpen(true)}>{t("imageWorkbench.notice.open")}</Button>
+                                    <div className="flex shrink-0 gap-2 lg:hidden">
+                                        <Button icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>
+                                            {t("workbench.logs")}
+                                        </Button>
+                                        <Button icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
+                                            {t("workbench.settings")}
+                                        </Button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -546,6 +564,7 @@ export default function ImagePage() {
                 </div>
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
+            <WorkbenchCreationNotice kind="image" open={!noticeAccepted || noticeOpen} onContinue={() => { setNoticeAccepted(true); setNoticeOpen(false); }} onCancel={declineCreation} />
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
             <Modal title={t("workbench.deleteLogs")} open={deleteConfirmOpen} onCancel={() => setDeleteConfirmOpen(false)} onOk={deleteSelectedLogs} okText={t("common.delete")} okButtonProps={{ danger: true }} cancelText={t("common.cancel")}>
                 {t("workbench.deleteLogsConfirm", { count: selectedLogIds.length })}
