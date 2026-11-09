@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [调整] GitHub Actions 在推送 local/billing 后仅构建 AMD64 镜像并发布 latest，清理旧镜像，默认部署改用当前仓库的镜像。
 + [调整] 默认 OpenAI API 地址改为 sub.zzshu.cc，并提供 apisub.zzshu.cc 预设供用户选择。
 
 ## v0.20.0 - 2026-10-10

@@ -7,6 +7,8 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 镜像发布：推送 `local/billing` 后应由 GitHub Actions 构建并推送 `ghcr.io/imi6/infinite-canvas:latest`，平台仅为 `linux/amd64`；镜像仓库只保留 `latest` 标签对应的版本，不生成版本号、提交号或额外架构镜像。默认 Docker Compose 应拉取此镜像，启动后的 API 地址选择应包含两个自定义地址。
+
 - API 地址预设：首次使用及新建 OpenAI 渠道应默认使用 `https://sub.zzshu.cc`；编辑渠道时可以从下拉选项中选择 `https://sub.zzshu.cc` 或 `https://apisub.zzshu.cc`，也可以手动输入其他地址；保存并重新打开后应保留所选地址。
 
 - Saved model selection: save a canvas node with a model, then remove its provider or remove that model while another video model remains the default. Generation, retry and pending-video recovery should keep the unavailable model selected and open configuration instead of sending a request to the default or first provider. Re-selecting a valid model should allow generation. Changing only the API key on the same provider should preserve the model; switching a config node from a valid image model to video should still use the video default.
