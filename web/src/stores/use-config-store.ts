@@ -79,7 +79,24 @@ const OPENAI_BASE_URL = DEFAULT_API_BASE_URLS[0];
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 export const LOCAL_PROXY_PACKAGE = "@basketikun/canvas-proxy";
 export const DEFAULT_LOCAL_PROXY_URL = "http://127.0.0.1:23210";
-export const SITE_PRESET_MODELS: ChannelModel[] = [{ name: "官转SD2.5-30图版-480P", capability: "video" }];
+// 来源：https://sub.zzshu.cc/api/v1/model-plaza，模型名称按公开目录原样保留。
+export const SITE_PRESET_MODELS: ChannelModel[] = [
+    { name: "gpt-image-2", capability: "image" },
+    { name: "gpt-image-2.5-flare", capability: "image" },
+    { name: "gpt-image-2.5-sunburst", capability: "image" },
+    { name: "gpt-image-2.6-flare", capability: "image" },
+    { name: "gpt-image-2.6-sunburst", capability: "image" },
+    { name: "grok-imagine-image-2.0", capability: "image" },
+    { name: "grok-imagine-video-1.5", capability: "video" },
+    { name: "TTseadanco2.5-480", capability: "video" },
+    { name: "TTseadanco2.5-720", capability: "video" },
+    { name: "特价seedance-2.0-720p", capability: "video" },
+    { name: "特价seedance-2.5-720p", capability: "video" },
+    { name: "wan3.0-prime-1080p", capability: "video" },
+    { name: "wan3.0-prime-720p", capability: "video" },
+    { name: "wan3.0-video-480p", capability: "video" },
+];
+export const SITE_DEFAULT_MODEL_NAMES: Partial<Record<ModelCapability, string>> = { image: "gpt-image-2", video: "grok-imagine-video-1.5" };
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
@@ -96,9 +113,9 @@ export const defaultConfig: AiConfig = {
             models: SITE_PRESET_MODELS.map((model) => ({ ...model })),
         },
     ],
-    model: "",
-    imageModel: "",
-    videoModel: encodeChannelModel("default", SITE_PRESET_MODELS[0].name),
+    model: encodeChannelModel("default", SITE_DEFAULT_MODEL_NAMES.image || ""),
+    imageModel: encodeChannelModel("default", SITE_DEFAULT_MODEL_NAMES.image || ""),
+    videoModel: encodeChannelModel("default", SITE_DEFAULT_MODEL_NAMES.video || ""),
     textModel: "",
     audioModel: "",
     audioVoice: "alloy",
@@ -252,7 +269,7 @@ export const useConfigStore = create<ConfigStore>()(
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
                 const persistedWebdav = (persistedState.webdav || {}) as Partial<WebdavSyncConfig>;
                 const config = { ...defaultConfig, ...persistedConfig };
-                if (!Array.isArray(persistedConfig.channels)) config.channels = [];
+                if (persistedState.config && !Array.isArray(persistedConfig.channels)) config.channels = [];
                 const channels = normalizeChannels(config);
                 const defaultChannel = channels.find((channel) => channel.id === "default" && channel.apiFormat === "openai");
                 if (defaultChannel && normalizedBaseUrlKey(defaultChannel.baseUrl) === "https://api.openai.com") {
@@ -271,7 +288,7 @@ export const useConfigStore = create<ConfigStore>()(
                         models,
                         imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels),
                         videoModel: normalizeModelOptionValue(config.videoModel, channels),
-                        textModel: normalizeModelOptionValue(config.textModel || config.model, channels),
+                        textModel: normalizeModelOptionValue(config.textModel, channels),
                         audioModel: normalizeModelOptionValue(config.audioModel || defaultConfig.audioModel, channels),
                         audioVoice: config.audioVoice || defaultConfig.audioVoice,
                         audioFormat: config.audioFormat || defaultConfig.audioFormat,
@@ -358,7 +375,7 @@ export function upsertChannelCredentials(
     });
     const channels = [...config.channels, channel];
     const nextConfig = { ...config, channels, models: modelOptionsFromChannels(channels) };
-    const videoModel = channel.models.find((model) => model.capability === "video");
+    const videoModel = channel.models.find((model) => model.capability === "video" && model.name === SITE_DEFAULT_MODEL_NAMES.video) || channel.models.find((model) => model.capability === "video");
     if (videoModel && !findChannelModel(nextConfig, config.videoModel)) nextConfig.videoModel = encodeChannelModel(channel.id, videoModel.name);
     return { status: "created", channelName: channel.name, config: nextConfig };
 }

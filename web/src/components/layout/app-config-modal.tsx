@@ -17,7 +17,7 @@ import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webd
 import { fetchChannelModels } from "@/services/api/image";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
 import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaScaleOptions, parseVideoResolution } from "@/lib/media-size";
-import { DEFAULT_API_BASE_URLS, SITE_PRESET_MODELS, createModelChannel, encodeChannelModel, guessCapability, isSiteChannel, modelOptionName, modelOptionsFromChannels, normalizeChannelModels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { DEFAULT_API_BASE_URLS, SITE_DEFAULT_MODEL_NAMES, SITE_PRESET_MODELS, createModelChannel, encodeChannelModel, isSiteChannel, modelOptionName, modelOptionsFromChannels, normalizeChannelModels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -120,7 +120,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
         updateChannels(config.channels.map((item) => (item.id === channel.id ? channel : item)));
     };
 
-    const enableSite = async () => {
+    const enableSite = async (refreshModels = false) => {
         const apiKey = siteApiKey.trim() || siteChannel?.apiKey.trim() || "";
         if (!apiKey) {
             message.error(t("config.siteSetup.keyRequired"));
@@ -129,12 +129,11 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
         setEnablingSite(true);
         try {
             const channel = createModelChannel({ ...siteChannel, name: siteChannel?.name || "sub.zzshu.cc", baseUrl: DEFAULT_API_BASE_URLS[0], apiFormat: "openai", apiKey });
-            const names = await fetchChannelModels(channel);
-            if (!names.length) throw new Error(t("config.siteSetup.emptyModels"));
+            const catalogModels = refreshModels ? normalizeChannelModels(await fetchChannelModels(channel)) : SITE_PRESET_MODELS;
             const current = useConfigStore.getState().config;
             const existing = current.channels.find((item) => item.id === channel.id);
             const existingModels = new Map((existing?.models || []).map((model) => [model.name, model]));
-            const available = normalizeChannelModels(names.map((name) => existingModels.get(name) || { name, capability: guessCapability(name) }));
+            const available = normalizeChannelModels(catalogModels.map((model) => existingModels.get(model.name) || model));
             if (!available.length) throw new Error(t("config.siteSetup.emptyModels"));
             const updated: ModelChannel = { ...(existing || channel), baseUrl: channel.baseUrl, apiKey, apiFormat: "openai", models: normalizeChannelModels([...(existing?.models || []), ...available]) };
             const channels = existing ? current.channels.map((item) => item.id === channel.id ? updated : item) : [...current.channels, updated];
@@ -146,7 +145,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                     if (/embed|rerank|whisper|transcri|moderation|realtime|suno|speech[-_]to[-_]text|(^|[-_])(asr|stt|udio)([-_]|$)|转录|识别/i.test(model.name)) return false;
                     return capability !== "audio" || /tts|speech|语音合成/i.test(model.name);
                 });
-                const preferred = models.find((model) => SITE_PRESET_MODELS.some((preset) => preset.capability === capability && preset.name === model.name)) || models.find((model) => model.name === modelOptionName(value)) || models[0];
+                const preferred = models.find((model) => model.name === SITE_DEFAULT_MODEL_NAMES[capability]) || models.find((model) => model.name === modelOptionName(value)) || models[0];
                 return preferred ? encodeChannelModel(channel.id, preferred.name) : "";
             };
             const imageModel = defaultFor("image", current.imageModel);
@@ -158,11 +157,11 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                 model: imageModel,
                 imageModel,
                 videoModel: defaultFor("video", current.videoModel),
-                textModel: defaultFor("text", current.textModel),
-                audioModel: defaultFor("audio", current.audioModel),
+                textModel: refreshModels ? defaultFor("text", current.textModel) : current.textModel,
+                audioModel: refreshModels ? defaultFor("audio", current.audioModel) : current.audioModel,
             } });
             setSiteApiKey("");
-            message.success(t("config.siteSetup.enabled", { count: available.length }));
+            message.success(t(refreshModels ? "config.siteSetup.refreshed" : "config.siteSetup.enabled", { count: available.length }));
         } catch (error) {
             message.error(t("config.siteSetup.failed", { error: error instanceof Error ? error.message : t("config.modelSelect.fetchFailed") }));
         } finally {
@@ -247,7 +246,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                     <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                                         <div>
                                             <div className="flex items-center gap-2 text-sm font-semibold"><KeyRound className="size-4" />{t("config.siteSetup.title")} · sub.zzshu.cc</div>
-                                            <p className="mt-1.5 text-xs text-muted-foreground">{t("config.siteSetup.description")}</p>
+                                            <p className="mt-1.5 text-xs text-muted-foreground">{t("config.siteSetup.description", { count: SITE_PRESET_MODELS.length })}</p>
                                         </div>
                                         <a href={DEFAULT_API_BASE_URLS[0]} target="_blank" rel="noopener noreferrer" className="text-xs underline underline-offset-4">{t("config.siteSetup.visit")} ↗</a>
                                     </div>
@@ -255,6 +254,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                     <div className="flex flex-col gap-2 sm:flex-row">
                                         <Input.Password id={siteKeyInputId} value={siteApiKey} onChange={(event) => setSiteApiKey(event.target.value)} onPressEnter={() => { if (!enablingSite) void enableSite(); }} placeholder={siteChannel?.apiKey ? t("config.siteSetup.savedKeyPlaceholder") : "sk-..."} autoComplete="off" disabled={enablingSite} className="min-w-0 flex-1" />
                                         <Button type="primary" loading={enablingSite} disabled={!siteApiKey.trim() && !siteChannel?.apiKey.trim()} onClick={() => void enableSite()}>{t("config.siteSetup.save")}</Button>
+                                        <Button icon={<RefreshCw className="size-4" />} disabled={enablingSite || (!siteApiKey.trim() && !siteChannel?.apiKey.trim())} onClick={() => void enableSite(true)}>{t("config.siteSetup.refresh")}</Button>
                                     </div>
                                     <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t("config.siteSetup.help")}</p>
                                     <p className="mt-1 text-xs text-muted-foreground">{t("config.siteSetup.keyStored")}</p>
