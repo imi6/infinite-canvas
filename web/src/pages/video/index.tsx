@@ -21,6 +21,7 @@ import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { boolConfig, modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
+import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 import i18n from "@/i18n";
 
 type GeneratedVideo = {
@@ -52,6 +53,8 @@ type GenerationLog = {
     model: string;
     config: GenerationLogConfig;
     references: ReferenceImage[];
+    videos: ReferenceVideo[];
+    audios: ReferenceAudio[];
     durationMs: number;
     size: string;
     resolution: string;
@@ -84,6 +87,8 @@ export default function VideoPage() {
     const addAsset = useAssetStore((state) => state.addAsset);
     const [prompt, setPrompt] = useState("");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
+    const [referenceVideos, setReferenceVideos] = useState<ReferenceVideo[]>([]);
+    const [referenceAudios, setReferenceAudios] = useState<ReferenceAudio[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
     const [logs, setLogs] = useState<GenerationLog[]>([]);
     const [running, setRunning] = useState(false);
@@ -91,7 +96,7 @@ export default function VideoPage() {
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [promptDialogOpen, setPromptDialogOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
-    const [referenceLinksOpen, setReferenceLinksOpen] = useState(false);
+    const [referenceLinkKind, setReferenceLinkKind] = useState<"image" | "video" | "audio" | null>(null);
     const [referenceLinks, setReferenceLinks] = useState("");
     const [startedAt, setStartedAt] = useState(0);
     const [elapsedMs, setElapsedMs] = useState(0);
@@ -107,7 +112,9 @@ export default function VideoPage() {
     const agentTaskIdRef = useRef<string | undefined>(undefined);
 
     const model = effectiveConfig.videoModel || effectiveConfig.model;
-    const canGenerate = Boolean(prompt.trim() || references.length);
+    const canGenerate = Boolean(prompt.trim() || references.length || referenceVideos.length || referenceAudios.length);
+    const referenceLinkLabel = t(`videoWorkbench.${referenceLinkKind === "video" ? "videoReferences" : referenceLinkKind === "audio" ? "audioReferences" : "references"}`);
+    const referenceLinkLimit = referenceLinkKind === "image" ? 30 : 10;
 
     useEffect(() => {
         if (!running || !startedAt) return;
@@ -133,7 +140,13 @@ export default function VideoPage() {
         setReferences((value) => [...value, ...nextReferences].slice(0, 30));
     };
 
+    const openReferenceLinks = (kind: "image" | "video" | "audio") => {
+        setReferenceLinks("");
+        setReferenceLinkKind(kind);
+    };
+
     const addReferenceLinks = () => {
+        if (!referenceLinkKind) return;
         const links = referenceLinks.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
         if (!links.length || links.some((value) => {
             try {
@@ -142,16 +155,23 @@ export default function VideoPage() {
                 return true;
             }
         })) {
-            message.error("请每行填写一个有效的 HTTP(S) 图片直链");
+            message.error(t("videoWorkbench.invalidReferenceLinks"));
             return;
         }
-        if (references.length + links.length > 30) {
-            message.error("参考图片最多 30 张，请减少链接或移除已有图片");
+        const count = referenceLinkKind === "image" ? references.length : referenceLinkKind === "video" ? referenceVideos.length : referenceAudios.length;
+        if (count + links.length > referenceLinkLimit) {
+            message.error(t("videoWorkbench.referenceLimit", { limit: referenceLinkLimit }));
             return;
         }
-        setReferences((value) => [...value, ...links.map((url) => ({ id: nanoid(), name: url, type: "image/*", url, dataUrl: url }))]);
+        if (referenceLinkKind === "image") {
+            setReferences((value) => [...value, ...links.map((url) => ({ id: nanoid(), name: url, type: "image/*", url, dataUrl: url }))]);
+        } else {
+            const media = links.map((url) => ({ id: nanoid(), name: url, type: "", url }));
+            if (referenceLinkKind === "video") setReferenceVideos((value) => [...value, ...media]);
+            else setReferenceAudios((value) => [...value, ...media]);
+        }
         setReferenceLinks("");
-        setReferenceLinksOpen(false);
+        setReferenceLinkKind(null);
     };
 
     const handleReferenceDragEnter = (event: DragEvent<HTMLDivElement>) => {
@@ -210,15 +230,15 @@ export default function VideoPage() {
         setStartedAt(batchStartedAt);
         let submittedLog: GenerationLog | undefined;
         try {
-            const task = await createVideoGenerationTask(snapshot.config, snapshot.text, snapshot.references);
-            const log = buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, durationMs: 0, status: "pending", task });
+            const task = await createVideoGenerationTask(snapshot.config, snapshot.text, snapshot.references, { videos: snapshot.videos, audios: snapshot.audios });
+            const log = buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, videos: snapshot.videos, audios: snapshot.audios, durationMs: 0, status: "pending", task });
             submittedLog = log;
             setPreviewLog(log);
             await saveLog(log, false);
             void pollGenerationLog(log, snapshot.config, agentTaskId);
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : t("workbench.generationFailed");
-            const log = submittedLog ? { ...submittedLog, error: errorMessage } : buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, durationMs: performance.now() - batchStartedAt, status: "failed", error: errorMessage });
+            const log = submittedLog ? { ...submittedLog, error: errorMessage } : buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, videos: snapshot.videos, audios: snapshot.audios, durationMs: performance.now() - batchStartedAt, status: "failed", error: errorMessage });
             setPreviewLog(log);
             setResults([{ id: log.id, status: "failed", error: errorMessage, canResume: Boolean(log.task), queryPaused: Boolean(log.task) }]);
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", successCount: 0, failCount: 1, error: errorMessage });
@@ -252,7 +272,7 @@ export default function VideoPage() {
 
     const buildRequestSnapshot = () => {
         const text = prompt.trim();
-        if (!text && !references.length) {
+        if (!text && !references.length && !referenceVideos.length && !referenceAudios.length) {
             message.error(t("videoWorkbench.promptRequired"));
             return null;
         }
@@ -261,7 +281,7 @@ export default function VideoPage() {
             openConfigDialog(true);
             return null;
         }
-        return { text, config: buildVideoConfig(effectiveConfig, model), references: [...references] };
+        return { text, config: buildVideoConfig(effectiveConfig, model), references: [...references], videos: [...referenceVideos], audios: [...referenceAudios] };
     };
 
     const retryResult = (result: GenerationResult) => {
@@ -304,6 +324,10 @@ export default function VideoPage() {
     const createSession = () => {
         setPrompt("");
         setReferences([]);
+        setReferenceVideos([]);
+        setReferenceAudios([]);
+        setReferenceLinkKind(null);
+        setReferenceLinks("");
         setResults([]);
         setElapsedMs(0);
         setStartedAt(0);
@@ -396,6 +420,8 @@ export default function VideoPage() {
         setLogsOpen(false);
         setPrompt(log.prompt);
         setReferences(log.references || []);
+        setReferenceVideos(log.videos || []);
+        setReferenceAudios(log.audios || []);
         if (log.config.videoModel || log.model) updateConfig("videoModel", log.config.videoModel || log.model);
         if (log.config.size) updateConfig("size", log.config.size);
         if (log.config.vquality) updateConfig("vquality", log.config.vquality);
@@ -447,8 +473,8 @@ export default function VideoPage() {
                                 <div className="mb-2 flex items-center justify-between gap-3">
                                     <span className="text-base font-semibold">{t("videoWorkbench.references")}</span>
                                     <div className="flex gap-2">
-                                        <Button size="small" icon={<Link2 className="size-3.5" />} disabled={references.length >= 30} onClick={() => setReferenceLinksOpen(true)}>
-                                            链接
+                                        <Button size="small" icon={<Link2 className="size-3.5" />} disabled={references.length >= 30} onClick={() => openReferenceLinks("image")}>
+                                            {t("videoWorkbench.link")}
                                         </Button>
                                         <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
                                             {t("workbench.clipboard")}
@@ -480,7 +506,37 @@ export default function VideoPage() {
                                     ))}
                                     {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{referenceDragTarget ? t("videoWorkbench.dropReferences") : t("videoWorkbench.noImages")}</div> : null}
                                 </div>
+                                <Typography.Paragraph type="secondary" className="!mb-0 mt-2 !text-xs">{t("videoWorkbench.publicReferencesHint")}</Typography.Paragraph>
                             </div>
+
+                            {(["video", "audio"] as const).map((kind) => {
+                                const items = kind === "video" ? referenceVideos : referenceAudios;
+                                return (
+                                    <div key={kind} className="min-w-0">
+                                        <div className="mb-2 flex items-center justify-between gap-3">
+                                            <span className="text-base font-semibold">{t(`videoWorkbench.${kind === "video" ? "videoReferences" : "audioReferences"}`)} <span className="text-xs font-normal text-stone-500">{items.length}/10</span></span>
+                                            <Button size="small" icon={<Link2 className="size-3.5" />} disabled={items.length >= 10} onClick={() => openReferenceLinks(kind)}>
+                                                {t("videoWorkbench.link")}
+                                            </Button>
+                                        </div>
+                                        <div className="space-y-2 rounded-lg border border-dashed border-stone-300 p-2 dark:border-stone-700">
+                                            {items.map((item, index) => (
+                                                <div key={item.id} className="space-y-2">
+                                                    <div className="flex min-w-0 items-center gap-2">
+                                                        <span className="shrink-0 text-xs text-stone-500">{index + 1}</span>
+                                                        <span className="min-w-0 flex-1 truncate text-xs" title={item.url}>{item.name}</span>
+                                                        <Button type="text" size="small" icon={<Trash2 className="size-3.5" />} aria-label={t(`videoWorkbench.${kind === "video" ? "removeVideo" : "removeAudio"}`)} onClick={() => kind === "video" ? setReferenceVideos((value) => value.filter((ref) => ref.id !== item.id)) : setReferenceAudios((value) => value.filter((ref) => ref.id !== item.id))} />
+                                                    </div>
+                                                    {kind === "video" ? <video src={item.url} controls playsInline preload="none" className="max-h-36 w-full rounded object-contain" /> : <audio src={item.url} controls preload="none" className="h-8 w-full" />}
+                                                </div>
+                                            ))}
+                                            {!items.length ? <div className="py-3 text-center text-sm text-stone-500">{t(`videoWorkbench.${kind === "video" ? "noVideos" : "noAudio"}`)}</div> : null}
+                                        </div>
+                                        {kind === "audio" ? <Typography.Paragraph type="secondary" className="!mb-0 mt-2 !text-xs">{t("videoWorkbench.audioReferencesHint")}</Typography.Paragraph> : null}
+                                    </div>
+                                );
+                            })}
+                            {referenceVideos.length || referenceAudios.length ? <Typography.Paragraph type="secondary" className="!mb-0 !text-xs">{t("videoWorkbench.mediaReferenceModeHint")}</Typography.Paragraph> : null}
 
                             <div className="flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900 sm:hidden">
                                 <span className="truncate text-stone-500 dark:text-stone-400">
@@ -542,9 +598,10 @@ export default function VideoPage() {
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
-            <Modal title="添加公网图片链接" open={referenceLinksOpen} onCancel={() => setReferenceLinksOpen(false)} onOk={addReferenceLinks} okText="添加" cancelText={t("common.cancel")}>
-                <Typography.Paragraph type="secondary">每行一个无需登录、可直接访问的图片链接，最多 30 张。当前站点的参考素材需使用公网直链，本地上传和粘贴不会把图片上传到公网。</Typography.Paragraph>
-                <Input.TextArea value={referenceLinks} onChange={(event) => setReferenceLinks(event.target.value)} rows={5} placeholder={"https://example.com/ref-1.png\nhttps://example.com/ref-2.png"} />
+            <Modal title={t("videoWorkbench.addReferenceLinks", { kind: referenceLinkLabel })} open={referenceLinkKind !== null} onCancel={() => setReferenceLinkKind(null)} onOk={addReferenceLinks} okText={t("common.add")} cancelText={t("common.cancel")}>
+                <Typography.Paragraph type="secondary">{t("videoWorkbench.referenceLinksHint", { limit: referenceLinkLimit })}</Typography.Paragraph>
+                {referenceLinkKind === "audio" ? <Typography.Paragraph type="secondary">{t("videoWorkbench.audioReferencesHint")}</Typography.Paragraph> : null}
+                <Input.TextArea value={referenceLinks} onChange={(event) => setReferenceLinks(event.target.value)} rows={5} placeholder={`https://example.com/ref-1.${referenceLinkKind === "video" ? "mp4" : referenceLinkKind === "audio" ? "mp3" : "png"}`} />
             </Modal>
             <Modal title={t("workbench.deleteLogs")} open={deleteConfirmOpen} onCancel={() => setDeleteConfirmOpen(false)} onOk={deleteSelectedLogs} okText={t("common.delete")} okButtonProps={{ danger: true }} cancelText={t("common.cancel")}>
                 {t("workbench.deleteLogsConfirm", { count: selectedLogIds.length })}
@@ -733,6 +790,8 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         model: log.model || config.videoModel || "",
         config,
         references,
+        videos: log.videos || [],
+        audios: log.audios || [],
         durationMs: log.durationMs || 0,
         size: log.size || config.size || "",
         resolution: normalizeResolution(log.resolution || config.vquality || ""),
@@ -783,7 +842,7 @@ function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
     };
 }
 
-function buildLog({ prompt, model, config, references, durationMs, status, task, video, error }: { prompt: string; model: string; config: AiConfig; references: ReferenceImage[]; durationMs: number; status: GenerationLog["status"]; task?: VideoGenerationTask; video?: GeneratedVideo; error?: string }): GenerationLog {
+function buildLog({ prompt, model, config, references, videos, audios, durationMs, status, task, video, error }: { prompt: string; model: string; config: AiConfig; references: ReferenceImage[]; videos: ReferenceVideo[]; audios: ReferenceAudio[]; durationMs: number; status: GenerationLog["status"]; task?: VideoGenerationTask; video?: GeneratedVideo; error?: string }): GenerationLog {
     const logConfig = {
         model: config.model,
         videoModel: config.videoModel,
@@ -803,6 +862,8 @@ function buildLog({ prompt, model, config, references, durationMs, status, task,
         model,
         config: logConfig,
         references,
+        videos,
+        audios,
         durationMs,
         size: logConfig.size,
         resolution: logConfig.vquality,

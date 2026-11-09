@@ -9,6 +9,7 @@ The current release needs manual verification in these areas:
 
 - 本站视频接口：OpenAI 格式提交 `POST /v1/videos` 应使用 JSON 和 Bearer 鉴权，字段为 `model`、`prompt`、数字 `duration`、`ratio` 和 `resolution`，自动比例提交 `adaptive`，不再提交旧的 multipart、`seconds`、`size`、`resolution_name` 字段。HTTP 200 或 202 返回任务 ID 后应保存任务，每 30 秒查询状态，仅 `completed` 后请求 `/v1/videos/{id}/content` 下载 MP4；明确失败才标记生成失败，约 5 分钟自动等待结束或查询中断后可继续查询原任务，不应重复提交。
 - 视频参考素材：视频工作台可直接添加公网图片链接，最多 30 张；1～2 张图片在首尾帧模式发送 `first_frame`、`last_frame`，多图或带音视频时使用 `reference_images`、`reference_videos`、`reference_audios`，两种模式不能同时发送。画布公网素材不应先下载转为本地数据；本地文件、`blob:` 和 `data:` 素材在提交前应明确提示先上传并提供公网文件链接。有参考素材时允许提示词为空。新插入的 OpenAI 视频脚本模板也应提交同一 JSON 协议并立即返回任务 ID，由应用统一查询和下载；用户已保存的自定义脚本继续按其脚本执行。
+- 视频创作台音视频入口：参考图下方应显示「参考视频」「参考音频」及各自的链接按钮，每行添加一个公网文件直链，每类最多 10 段；只添加链接不应先下载素材。素材可通过播放器预览并单独移除；音频提示每段至少 1.8 秒、总时长不超过 30 秒，实际时长由接口校验。存在音视频时应提示图片也按参考素材提交，不使用首尾帧字段；无提示词但有音视频素材时应允许提交。生成记录需保存并在重新打开记录、刷新页面后恢复音视频链接，新建记录需清空这些素材；任务查询中断后继续查询原任务，不重新提交素材或创建任务。图片空态应显示最多 30 张，音视频入口不应暗示已支持本地上传至公网。
 
 - 镜像发布：推送 `local/billing` 后应由 GitHub Actions 构建并推送 `ghcr.io/imi6/infinite-canvas:latest`，平台仅为 `linux/amd64`；镜像仓库只保留 `latest` 标签对应的版本，不生成版本号、提交号或额外架构镜像。默认 Docker Compose 应拉取此镜像，启动后的 API 地址选择应包含两个自定义地址。
 
