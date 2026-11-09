@@ -187,6 +187,40 @@ export default {
     },
     videoWorkbench: {
         title: "Video Studio",
+        notice: {
+            title: "Before you start creating",
+            badge: "Video Studio",
+            description: "Please read the following information before creating to help avoid failed generations or lost work.",
+            items: {
+                safety: {
+                    title: "1. Content safety checks",
+                    body: "Cloud model providers check prompts, reference assets and generated content for safety. Requests involving prohibited, sensitive or restricted content may be blocked. A content moderation or safety policy error usually does not mean this site is unavailable. Adjust your prompt before trying again.",
+                },
+                saving: {
+                    title: "2. Save your work promptly",
+                    body: "Creation records remain in this browser. Finished videos and reference assets uploaded for video generation are temporarily stored in the cloud for 30 days. Reusing them does not extend this period, and this storage is not a permanent backup. Download your work promptly. Clearing browser data, using private browsing or switching devices can still cause records to be lost.",
+                },
+                limits: {
+                    title: "3. Size and quality limits",
+                    body: "Output dimensions, aspect ratio, video duration and resolution depend on the selected cloud model. Some models do not support custom dimensions or ratios and may use default settings, resize or crop the output.",
+                },
+                privacy: {
+                    title: "4. Privacy and content rights",
+                    body: "Prompts and reference assets are sent to the selected cloud model provider. Temporarily stored media links can be opened without signing in; anyone with a link can access it. Do not publicly share links to private assets. Do not upload identity documents, account passwords, trade secrets or other sensitive information. Ensure you have the rights to use the assets, likenesses and content you provide.",
+                },
+                submission: {
+                    title: "5. Avoid duplicate submissions",
+                    body: "Generation can take time. Avoid refreshing or closing the page, and do not click Generate repeatedly, as this may create duplicate tasks or charges.",
+                    extra: "Video tasks typically take longer. Closing or refreshing the page while a task is running may prevent its result from appearing automatically in the current creation record.",
+                },
+            },
+            agreement: "Continuing confirms that you understand this information and agree to follow the relevant model providers' usage rules.",
+            snooze: "Do not show again for 7 days",
+            later: "Not now",
+            continue: "I understand, start creating",
+            open: "Creation notice",
+            cancelled: "The user chose not to use Video Studio",
+        },
         creationSettings: "Creation settings",
         creationSubtitle: "Choose a model and creation method, then prepare the required assets",
         generationModel: "Generation model",

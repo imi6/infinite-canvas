@@ -1,10 +1,11 @@
-import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ChevronDown, ClipboardPaste, Download, FolderPlus, History, ImageIcon, Link2, LoaderCircle, MoreHorizontal, Music2, Plus, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ChevronDown, CircleAlert, ClipboardPaste, Download, FolderPlus, History, ImageIcon, Link2, LoaderCircle, MoreHorizontal, Music2, Plus, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
 import { App, Button, Checkbox, Drawer, Dropdown, Empty, Input, Modal, Segmented, Tag, Typography, theme as antdTheme } from "antd";
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { ModelPicker } from "@/components/model-picker";
@@ -23,6 +24,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 import i18n from "@/i18n";
+import { isVideoNoticeSnoozed, VideoCreationNotice } from "./creation-notice";
 
 type GeneratedVideo = {
     id: string;
@@ -77,6 +79,7 @@ const logStore = localforage.createInstance({ name: "infinite-canvas", storeName
 export default function VideoPage() {
     const { message } = App.useApp();
     const { t } = useTranslation();
+    const navigate = useNavigate();
     const { token } = antdTheme.useToken();
     const canvasTheme = canvasThemes[useThemeStore((state) => state.theme)];
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
@@ -89,6 +92,8 @@ export default function VideoPage() {
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
     const [prompt, setPrompt] = useState("");
+    const [noticeAccepted, setNoticeAccepted] = useState(isVideoNoticeSnoozed);
+    const [noticeOpen, setNoticeOpen] = useState(false);
     const [creationMode, setCreationMode] = useState<CreationMode>("text");
     const [firstFrame, setFirstFrame] = useState<ReferenceImage | null>(null);
     const [lastFrame, setLastFrame] = useState<ReferenceImage | null>(null);
@@ -224,6 +229,7 @@ export default function VideoPage() {
         }
     };
     const generate = async () => {
+        if (!noticeAccepted) return;
         const agentTaskId = agentTaskIdRef.current;
         agentTaskIdRef.current = undefined;
         const snapshot = buildRequestSnapshot();
@@ -260,7 +266,7 @@ export default function VideoPage() {
 
     // Handle video-generation commands from the Agent panel by setting the prompt and optionally starting generation.
     useEffect(() => {
-        if (!videoCommand || videoCommand.nonce === processedCommandRef.current) return;
+        if (!noticeAccepted || !videoCommand || videoCommand.nonce === processedCommandRef.current) return;
         processedCommandRef.current = videoCommand.nonce;
         clearVideoCommand();
         if (typeof videoCommand.prompt === "string") setPrompt(videoCommand.prompt);
@@ -272,13 +278,13 @@ export default function VideoPage() {
             agentTaskIdRef.current = videoCommand.taskId;
             setAutoRunToken((value) => value + 1);
         }
-    }, [videoCommand, clearVideoCommand, running, updateAgentTask]);
+    }, [noticeAccepted, videoCommand, clearVideoCommand, running, updateAgentTask]);
 
     useEffect(() => {
-        if (!autoRunToken) return;
+        if (!autoRunToken || !noticeAccepted) return;
         void generate();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [autoRunToken]);
+    }, [autoRunToken, noticeAccepted]);
 
     const buildRequestSnapshot = () => {
         const text = prompt.trim();
@@ -466,6 +472,14 @@ export default function VideoPage() {
         setResults(log.status === "pending" && !log.error ? [{ id: log.id, status: "pending" }] : log.video ? [{ id: log.video.id, status: "success", video: log.video }] : [{ id: log.id, status: "failed", error: log.error || t("workbench.generationFailed"), canResume: Boolean(log.task), queryPaused: log.status === "pending" }]);
     };
 
+    const declineCreation = () => {
+        const taskId = agentTaskIdRef.current || (videoCommand?.run ? videoCommand.taskId : undefined);
+        if (taskId) updateAgentTask(taskId, { status: "failed", error: t("videoWorkbench.notice.cancelled") });
+        agentTaskIdRef.current = undefined;
+        clearVideoCommand();
+        navigate("/", { replace: true });
+    };
+
     return (
         <div className="flex h-full flex-col overflow-hidden" style={{ background: token.colorBgLayout, color: token.colorText }}>
             <main className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5 lg:overflow-hidden">
@@ -478,6 +492,7 @@ export default function VideoPage() {
                                     <p className="mt-1.5 text-xs leading-relaxed" style={{ color: token.colorTextSecondary }}>{t("videoWorkbench.creationSubtitle")}</p>
                                 </div>
                                 <div className="flex shrink-0 gap-1">
+                                    <Button type="text" size="small" icon={<CircleAlert className="size-3.5" />} onClick={() => setNoticeOpen(true)}>{t("videoWorkbench.notice.open")}</Button>
                                     <Button type="text" size="small" icon={<History className="size-3.5" />} onClick={() => setLogsOpen(true)}>
                                         {t("workbench.logs")} · {logs.length}
                                     </Button>
@@ -651,6 +666,7 @@ export default function VideoPage() {
                 <LogPanel logs={logs} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={() => setDeleteConfirmOpen(true)} onPreviewLog={previewGenerationLog} />
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
+            <VideoCreationNotice open={!noticeAccepted || noticeOpen} onContinue={() => { setNoticeAccepted(true); setNoticeOpen(false); }} onCancel={declineCreation} />
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
             <Modal title={t("videoWorkbench.addReferenceLinks", { kind: referenceLinkLabel })} open={referenceLinkKind !== null} onCancel={() => setReferenceLinkKind(null)} onOk={addReferenceLinks} okText={t("common.add")} cancelText={t("common.cancel")}>
                 <Typography.Paragraph type="secondary">{t("videoWorkbench.referenceLinksHint", { limit: referenceLinkLimit })}</Typography.Paragraph>
