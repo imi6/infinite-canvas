@@ -189,7 +189,8 @@ export function getPluginVariables(): PluginVariable[] {
 }
 
 export function getPluginReturn(capability: ModelCapability) {
-    return i18n.t(`modelPlugin.returns.${capability}`);
+    const description = i18n.t(`modelPlugin.returns.${capability}`);
+    return capability === "video" ? `${description}\n也可返回 {taskId: string}，应用会保存任务 ID，并按本站 /v1/videos/{id} 接口查询，完成后下载 /content。` : description;
 }
 
 export function getPluginAuthoringPrompt(capability: ModelCapability, modelName: string, draft = "") {
@@ -222,6 +223,8 @@ export function getPluginAuthoringPrompt(capability: ModelCapability, modelName:
 }
 
 export type PluginTemplate = { label: string; script: string };
+
+export const JSON_VIDEO_SCRIPT_MARKER = "// 视频接口：zzshu JSON v1";
 
 export function getPluginTemplates(): Record<ModelCapability, PluginTemplate[]> {
     return {
@@ -435,123 +438,97 @@ return await generateImage({
     video: [
         {
             label: i18n.t("modelPlugin.templates.openai"),
-            script: `/**
- * OpenAI-compatible video: POST /v1/videos (multipart), then poll GET /v1/videos/{id}.
- * Do not set Content-Type on FormData; the browser adds the boundary.
+            script: `${JSON_VIDEO_SCRIPT_MARKER}
+/**
+ * 站点视频接口：POST /v1/videos 提交 JSON，立即返回任务 ID 交给应用保存。
+ * 应用统一查询 /v1/videos/{id}，完成后下载 /content；中断后可继续查询原任务。
+ * 素材必须是公网可直接访问的文件链接，不接受本地文件或 data/blob URL。
  * @param {string} prompt
- * @param {string[]} images - reference images as data URLs
- * @param {File[]} videos - reference videos; empty when none
- * @param {File[]} audios - reference audio; empty when none
  * @param {object} params
- * @param {string} params.mode - "frames" uses first/last frame fields; "reference" sends all images as references. More than 2 images become "reference".
- * @param {string|number} params.seconds - duration
- * @param {string} params.size - output size, e.g. "1280x720"
- * @param {string} params.resolution - e.g. "720p"
- * @param {boolean} params.generateAudio
- * @param {boolean} params.watermark
+ * @param {string[]} params.imageUrls - 图片公网链接，最多 30 张
+ * @param {string[]} params.videoUrls - 参考视频公网链接，最多 10 段
+ * @param {string[]} params.audioUrls - 参考音频公网链接，最多 10 段
+ * @param {string} params.mode - frames 为首尾帧模式；多于两张图片或有音视频时使用参考素材模式
+ * @param {string|number} params.seconds - 视频时长，提交为 duration
+ * @param {string} params.ratio - 画面比例，auto 提交为 adaptive
+ * @param {string} params.resolution - 分辨率，例如 480p、720p
  * @param {string} model
- * @param {string} baseUrl
  * @param {string} apiKey
  * @param {function} request
- * @param {function} poll
- * @returns {Promise<{url: string}|Blob>}
+ * @returns {Promise<{taskId: string}>}
  */
 async function generateVideo({
   prompt,
-  images,
-  videos,
-  audios,
   params: {
+    imageUrls = [],
+    videoUrls = [],
+    audioUrls = [],
     mode,
     seconds,
-    size,
+    ratio,
     resolution,
-    generateAudio,
-    watermark,
   },
   model,
-  baseUrl,
   apiKey,
   request,
-  poll,
 }) {
-  const form = new FormData();
-  form.set("model", model);
-  form.set("prompt", prompt);
-  form.set("seconds", String(seconds || 8));
-  form.set("size", String(size || "1280x720"));
-  form.set("resolution_name", String(resolution || "720p"));
-  form.set("generate_audio", String(generateAudio !== false));
-  form.set("watermark", String(watermark === true));
-  form.set("mode", mode);
-  if (mode === "frames") {
+  function validateUrls(urls, label, limit) {
+    if (urls.length > limit) throw new Error(label + "最多支持 " + limit + " 个");
+    for (const url of urls) {
+      let parsed;
+      try { parsed = new URL(url); } catch {}
+      if (!parsed || !["http:", "https:"].includes(parsed.protocol)) {
+        throw new Error(label + "必须使用公网可直接访问的 HTTP(S) 文件链接，请先上传素材并填写链接");
+      }
+    }
+    return urls;
+  }
+  const images = validateUrls(imageUrls, "参考图片", 30);
+  const videos = validateUrls(videoUrls, "参考视频", 10);
+  const audios = validateUrls(audioUrls, "参考音频", 10);
+  if (!prompt.trim() && !images.length && !videos.length && !audios.length) {
+    throw new Error("请填写提示词或提供参考素材");
+  }
+  const body = {
+    model,
+    prompt: prompt || undefined,
+    duration: Number(seconds) || 8,
+    ratio: !ratio || ratio === "auto" ? "adaptive" : ratio,
+    resolution: resolution || "720p",
+  };
+  if (mode === "frames" && images.length <= 2 && !videos.length && !audios.length) {
     if (images[0]) {
-      form.append("first_frame", await (await fetch(images[0])).blob(), "first.png");
+      body.first_frame = { image_url: images[0] };
     }
     if (images[1]) {
-      form.append("last_frame", await (await fetch(images[1])).blob(), "last.png");
+      body.last_frame = { image_url: images[1] };
     }
   } else {
-    for (const dataUrl of images) {
-      form.append("image[]", await (await fetch(dataUrl)).blob(), "ref.png");
-    }
-  }
-  for (const file of videos) {
-    form.append("video[]", file);
-  }
-  for (const file of audios) {
-    form.append("audio[]", file);
+    if (images.length) body.reference_images = images.map((image_url) => ({ image_url }));
+    if (videos.length) body.reference_videos = videos.map((video_url) => ({ video_url }));
+    if (audios.length) body.reference_audios = audios.map((audio_url) => ({ audio_url }));
   }
 
   const headers = {
     Authorization: \`Bearer \${apiKey}\`,
   };
+  // 提交只执行一次；拿到任务 ID 后交给应用保存和查询，避免重复扣费。
   const task = await request({
     method: "post",
-    url: \`\${baseUrl}/v1/videos\`,
-    headers,
-    data: form,
+    url: "/videos",
+    headers: { ...headers, "Content-Type": "application/json" },
+    data: body,
   });
-
-  return await poll(
-    async () => {
-      const state = await request({
-        method: "get",
-        url: \`\${baseUrl}/v1/videos/\${task.id}\`,
-        headers,
-      });
-      if (state.status === "failed" || state.status === "cancelled") {
-        throw new Error(state.error && state.error.message ? state.error.message : "video generation failed");
-      }
-      if (state.video_url || state.url) {
-        return { url: state.video_url || state.url };
-      }
-      if (state.status === "completed") {
-        return await request({
-          method: "get",
-          url: \`\${baseUrl}/v1/videos/\${task.id}/content\`,
-          headers,
-          responseType: "blob",
-        });
-      }
-      return null;
-    },
-    (result) => result,
-    { intervalMs: 2500, timeoutMs: 300000 },
-  );
+  if (!task.id) throw new Error("视频接口未返回任务 ID");
+  return { taskId: String(task.id) };
 }
 
 return await generateVideo({
   prompt,
-  images,
-  videos,
-  audios,
   params,
   model,
-  baseUrl,
   apiKey,
   request,
-  poll,
 });`,
         },
         {

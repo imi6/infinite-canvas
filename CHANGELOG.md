@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [调整] 视频生成适配本站 JSON 异步接口，支持公网参考素材、每 30 秒查询及保留任务继续查询。
 + [修复] 加载已保存配置时将默认渠道的旧 OpenAI 地址更新为 sub.zzshu.cc，保留其他渠道及用户选择的备用地址。
 + [调整] GitHub Actions 在推送 local/billing 后仅构建 AMD64 镜像并发布 latest，清理旧镜像，默认部署改用当前仓库的镜像。
 + [调整] 默认 OpenAI API 地址改为 sub.zzshu.cc，并提供 apisub.zzshu.cc 预设供用户选择。

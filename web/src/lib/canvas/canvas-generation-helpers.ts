@@ -172,6 +172,7 @@ export function sourceNodeReferenceImages(node: CanvasNodeData | null) {
             name: `${node.title || node.id}.png`,
             type: node.metadata.mimeType || "image/png",
             dataUrl: node.metadata.content,
+            url: node.metadata.content,
             storageKey: node.metadata.storageKey,
         },
     ];

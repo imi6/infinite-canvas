@@ -2370,9 +2370,8 @@ function InfiniteCanvasPage() {
             const runController = startGenerationRequest(nodeId, nodeId, nodeId);
             const sourceTextContent = sourceNode?.type === CanvasNodeType.Text ? sourceNode.metadata?.content?.trim() || "" : "";
             const editingTextNode = mode === "text" && Boolean(sourceTextContent);
-            const generationContext = await hydrateNodeGenerationContext(
-                buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? t("canvas.projectPage.editTextPrompt", { source: sourceTextContent, prompt }) : prompt),
-            );
+            const rawContext = buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? t("canvas.projectPage.editTextPrompt", { source: sourceTextContent, prompt }) : prompt);
+            const generationContext = mode === "video" ? rawContext : await hydrateNodeGenerationContext(rawContext);
             const effectivePrompt = generationContext.prompt.trim();
             if (runController.signal.aborted) {
                 finishGenerationRequest(nodeId, runController);
@@ -2790,9 +2789,10 @@ function InfiniteCanvasPage() {
                 return;
             }
 
-            const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
+            const rawContext = hasSavedImageMetadata ? null : buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || "");
+            const context = rawContext && node.type !== CanvasNodeType.Video ? await hydrateNodeGenerationContext(rawContext) : rawContext;
             const prompt = (savedImageMetadata?.prompt || context?.prompt || "").trim();
-            if (!prompt) {
+            if (!prompt && !(node.type === CanvasNodeType.Video && context && (context.referenceImages.length || context.referenceVideos.length || context.referenceAudios.length))) {
                 message.warning(t("canvas.projectPage.retryPromptMissing"));
                 return;
             }
