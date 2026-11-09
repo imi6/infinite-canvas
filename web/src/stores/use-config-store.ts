@@ -13,6 +13,8 @@ export type ChannelModel = {
     name: string;
     capability: ModelCapability;
     script?: string;
+    catalogCapability?: ModelCapability;
+    capabilityOverride?: boolean;
 };
 
 export type ModelChannel = {
@@ -22,6 +24,8 @@ export type ModelChannel = {
     apiKey: string;
     apiFormat: ApiCallFormat;
     models: ChannelModel[];
+    siteCatalogEnabled?: boolean;
+    siteCatalogSyncedAt?: string;
 };
 
 export type AiConfig = {
@@ -79,25 +83,6 @@ const OPENAI_BASE_URL = DEFAULT_API_BASE_URLS[0];
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 export const LOCAL_PROXY_PACKAGE = "@basketikun/canvas-proxy";
 export const DEFAULT_LOCAL_PROXY_URL = "http://127.0.0.1:23210";
-// 来源：https://sub.zzshu.cc/api/v1/model-plaza，模型名称按公开目录原样保留。
-export const SITE_PRESET_MODELS: ChannelModel[] = [
-    { name: "gpt-image-2", capability: "image" },
-    { name: "gpt-image-2.5-flare", capability: "image" },
-    { name: "gpt-image-2.5-sunburst", capability: "image" },
-    { name: "gpt-image-2.6-flare", capability: "image" },
-    { name: "gpt-image-2.6-sunburst", capability: "image" },
-    { name: "grok-imagine-image-2.0", capability: "image" },
-    { name: "grok-imagine-video-1.5", capability: "video" },
-    { name: "TTseadanco2.5-480", capability: "video" },
-    { name: "TTseadanco2.5-720", capability: "video" },
-    { name: "特价seedance-2.0-720p", capability: "video" },
-    { name: "特价seedance-2.5-720p", capability: "video" },
-    { name: "wan3.0-prime-1080p", capability: "video" },
-    { name: "wan3.0-prime-720p", capability: "video" },
-    { name: "wan3.0-video-480p", capability: "video" },
-];
-export const SITE_DEFAULT_MODEL_NAMES: Partial<Record<ModelCapability, string>> = { image: "gpt-image-2", video: "grok-imagine-video-1.5" };
-
 export const defaultConfig: AiConfig = {
     channelMode: "local",
     baseUrl: OPENAI_BASE_URL,
@@ -110,12 +95,13 @@ export const defaultConfig: AiConfig = {
             baseUrl: OPENAI_BASE_URL,
             apiKey: "",
             apiFormat: "openai",
-            models: SITE_PRESET_MODELS.map((model) => ({ ...model })),
+            models: [],
+            siteCatalogEnabled: true,
         },
     ],
-    model: encodeChannelModel("default", SITE_DEFAULT_MODEL_NAMES.image || ""),
-    imageModel: encodeChannelModel("default", SITE_DEFAULT_MODEL_NAMES.image || ""),
-    videoModel: encodeChannelModel("default", SITE_DEFAULT_MODEL_NAMES.video || ""),
+    model: "",
+    imageModel: "",
+    videoModel: "",
     textModel: "",
     audioModel: "",
     audioVoice: "alloy",
@@ -129,7 +115,7 @@ export const defaultConfig: AiConfig = {
     videoMode: "frames",
     systemPrompt: "",
     reasoningEffort: "auto",
-    models: SITE_PRESET_MODELS.map((model) => encodeChannelModel("default", model.name)),
+    models: [],
     quality: "auto",
     size: "1:1",
     background: "",
@@ -174,8 +160,6 @@ const IMAGE_KEYWORDS = ["seedream", "gpt-image", "image", "dall-e", "dalle", "im
 
 /** Best-effort default capability for a freshly fetched model name; user can override in the channel editor. */
 export function guessCapability(name: string): ModelCapability {
-    const preset = SITE_PRESET_MODELS.find((model) => model.name === name);
-    if (preset) return preset.capability;
     const value = name.toLowerCase();
     if (VIDEO_KEYWORDS.some((keyword) => value.includes(keyword))) return "video";
     if (AUDIO_KEYWORDS.some((keyword) => value.includes(keyword))) return "audio";
@@ -327,7 +311,9 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
         seen.add(name);
         const capability = typeof item === "string" ? guessCapability(name) : item.capability || guessCapability(name);
         const script = typeof item === "string" ? undefined : item.script?.trim() || undefined;
-        result.push({ name, capability, script });
+        const catalogCapability = typeof item === "string" ? undefined : item.catalogCapability;
+        const capabilityOverride = typeof item !== "string" && item.capabilityOverride;
+        result.push({ name, capability, script, ...(catalogCapability ? { catalogCapability } : {}), ...(capabilityOverride ? { capabilityOverride: true } : {}) });
     }
     return result;
 }
@@ -341,7 +327,9 @@ export function createModelChannel(channel?: Partial<ModelChannel>): ModelChanne
         baseUrl,
         apiKey: channel?.apiKey || "",
         apiFormat,
-        models: normalizeChannelModels(channel?.models === undefined && isSiteChannel({ baseUrl, apiFormat }) ? SITE_PRESET_MODELS : channel?.models),
+        models: normalizeChannelModels(channel?.models),
+        siteCatalogEnabled: isSiteChannel({ baseUrl, apiFormat }) && channel?.siteCatalogEnabled !== false,
+        siteCatalogSyncedAt: channel?.siteCatalogSyncedAt,
     };
 }
 
@@ -375,13 +363,86 @@ export function upsertChannelCredentials(
     });
     const channels = [...config.channels, channel];
     const nextConfig = { ...config, channels, models: modelOptionsFromChannels(channels) };
-    const videoModel = channel.models.find((model) => model.capability === "video" && model.name === SITE_DEFAULT_MODEL_NAMES.video) || channel.models.find((model) => model.capability === "video");
+    const videoModel = channel.models.find((model) => model.capability === "video");
     if (videoModel && !findChannelModel(nextConfig, config.videoModel)) nextConfig.videoModel = encodeChannelModel(channel.id, videoModel.name);
     return { status: "created", channelName: channel.name, config: nextConfig };
 }
 
 export function isSiteChannel(channel: Pick<ModelChannel, "baseUrl" | "apiFormat">) {
     return channel.apiFormat === "openai" && DEFAULT_API_BASE_URLS.some((baseUrl) => normalizedBaseUrlKey(channel.baseUrl) === normalizedBaseUrlKey(baseUrl));
+}
+
+export function isCreativeModel(model: ChannelModel) {
+    if (model.script?.trim()) return true;
+    if (/embed|rerank|whisper|transcri|moderation|realtime|suno|speech[-_]to[-_]text|(^|[-_])(asr|stt|udio)([-_]|$)|转录|识别/i.test(model.name)) return false;
+    return model.capability !== "audio" || /tts|speech|语音合成/i.test(model.name);
+}
+
+/** 仅同步本站目录管理的模型，不修改画布节点和已提交任务。 */
+export function applySiteModelCatalog(config: AiConfig, catalog: ChannelModel[], syncedAt: string): AiConfig {
+    if (!catalog.length) return config;
+    const names = new Set(catalog.map((model) => model.name));
+    const following = new Set<string>();
+    const retired = new Map<string, Set<string>>();
+    let changed = false;
+    const channels = config.channels.map((channel) => {
+        if (!isSiteChannel(channel) || channel.siteCatalogEnabled === false) return channel;
+        if (Date.parse(channel.siteCatalogSyncedAt || "") > Date.parse(syncedAt)) return channel;
+        following.add(channel.id);
+        const existing = new Map(channel.models.map((model) => [model.name, model]));
+        retired.set(channel.id, new Set(channel.models.filter((model) => model.catalogCapability && !names.has(model.name)).map((model) => model.name)));
+        const models: ChannelModel[] = catalog.map((model) => {
+            const previous = existing.get(model.name);
+            const capabilityOverride = previous?.capabilityOverride || Boolean(previous && previous.capability !== (previous.catalogCapability || model.capability));
+            return {
+                ...model,
+                script: previous?.script,
+                capability: previous && capabilityOverride ? previous.capability : model.capability,
+                catalogCapability: model.capability,
+                capabilityOverride: capabilityOverride || undefined,
+            };
+        });
+        for (const model of channel.models) {
+            if (names.has(model.name)) continue;
+            // 下架项上的自定义脚本或能力保留为手工模型，不迁移到新名称。
+            if (!model.catalogCapability || model.script?.trim() || model.capabilityOverride || model.capability !== model.catalogCapability) {
+                const custom = { ...model };
+                delete custom.catalogCapability;
+                models.push(custom);
+            }
+        }
+        const same = channel.siteCatalogEnabled === true && channel.siteCatalogSyncedAt === syncedAt && models.length === channel.models.length && models.every((model, index) => {
+            const previous = channel.models[index];
+            return model.name === previous.name && model.capability === previous.capability && model.script === previous.script && model.catalogCapability === previous.catalogCapability && model.capabilityOverride === previous.capabilityOverride;
+        });
+        if (same) return channel;
+        changed = true;
+        return { ...channel, models, siteCatalogEnabled: true, siteCatalogSyncedAt: syncedAt };
+    });
+    const next = { ...config, channels };
+    const defaultFor = (capability: ModelCapability, value: string) => {
+        const decoded = decodeChannelModel(value);
+        const match = findChannelModel(next, value);
+        const channelId = decoded?.channelId || match?.channel.id;
+        if (value && !following.has(channelId || "")) return value;
+        if (match?.model.capability === capability && !retired.get(match.channel.id)?.has(match.model.name)) return value;
+        const candidates = channels.filter((channel) => following.has(channel.id));
+        const preferred = candidates.find((channel) => channel.id === channelId);
+        for (const channel of preferred ? [preferred, ...candidates.filter((item) => item !== preferred)] : candidates) {
+            const model = channel.models.find((item) => names.has(item.name) && item.capability === capability && isCreativeModel(item));
+            if (model) return encodeChannelModel(channel.id, model.name);
+        }
+        return "";
+    };
+    const defaults = {
+        model: defaultFor("image", config.model),
+        imageModel: defaultFor("image", config.imageModel),
+        videoModel: defaultFor("video", config.videoModel),
+        textModel: defaultFor("text", config.textModel),
+        audioModel: defaultFor("audio", config.audioModel),
+    };
+    if (!changed && Object.entries(defaults).every(([key, value]) => config[key as keyof typeof defaults] === value)) return config;
+    return { ...next, ...defaults, models: modelOptionsFromChannels(channels) };
 }
 
 function isHttpBaseUrl(baseUrl: string) {

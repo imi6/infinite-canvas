@@ -17,7 +17,8 @@ import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webd
 import { fetchChannelModels } from "@/services/api/image";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
 import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaScaleOptions, parseVideoResolution } from "@/lib/media-size";
-import { DEFAULT_API_BASE_URLS, SITE_DEFAULT_MODEL_NAMES, SITE_PRESET_MODELS, createModelChannel, encodeChannelModel, isSiteChannel, modelOptionName, modelOptionsFromChannels, normalizeChannelModels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { DEFAULT_API_BASE_URLS, applySiteModelCatalog, createModelChannel, encodeChannelModel, isCreativeModel, isSiteChannel, modelOptionName, modelOptionsFromChannels, normalizeChannelModels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { useSiteModelCatalogStore } from "@/stores/use-site-model-catalog-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -64,6 +65,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     const [webdavSyncStatus, setWebdavSyncStatus] = useState("");
     const [webdavDomainProgress, setWebdavDomainProgress] = useState(createWebdavDomainProgress);
     const config = useConfigStore((state) => state.config);
+    const catalog = useSiteModelCatalogStore();
     const siteChannel = config.channels.find(isSiteChannel);
     const webdav = useConfigStore((state) => state.webdav);
     const updateConfig = useConfigStore((state) => state.updateConfig);
@@ -78,7 +80,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     useEffect(() => setActiveTab(initialTab), [initialTab]);
 
     const saveConfig = (nextConfig: AiConfig) => {
-        (Object.keys(nextConfig) as Array<keyof AiConfig>).forEach((key) => updateConfig(key, nextConfig[key]));
+        useConfigStore.setState({ config: nextConfig });
     };
 
     const finishConfig = () => {
@@ -128,24 +130,37 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
         }
         setEnablingSite(true);
         try {
-            const channel = createModelChannel({ ...siteChannel, name: siteChannel?.name || "sub.zzshu.cc", baseUrl: DEFAULT_API_BASE_URLS[0], apiFormat: "openai", apiKey });
-            const catalogModels = refreshModels ? normalizeChannelModels(await fetchChannelModels(channel)) : SITE_PRESET_MODELS;
+            const channel = createModelChannel({ ...siteChannel, name: siteChannel?.name || "sub.zzshu.cc", baseUrl: siteChannel?.baseUrl || DEFAULT_API_BASE_URLS[0], apiFormat: "openai", apiKey });
+            const fetched = refreshModels ? await fetchChannelModels(channel) : null;
             const current = useConfigStore.getState().config;
             const existing = current.channels.find((item) => item.id === channel.id);
+            if (siteChannel && !existing) return;
+            if (existing && (existing.baseUrl !== channel.baseUrl || existing.apiFormat !== channel.apiFormat || existing.apiKey !== siteChannel?.apiKey)) throw new Error(t("config.siteSetup.changedWhileLoading"));
+            if (!fetched) {
+                const updated = { ...(existing || channel), apiKey, siteCatalogEnabled: true };
+                const channels = existing ? current.channels.map((item) => item.id === channel.id ? updated : item) : [...current.channels, updated];
+                const latestCatalog = useSiteModelCatalogStore.getState();
+                useConfigStore.setState({ config: applySiteModelCatalog({ ...current, channels, models: modelOptionsFromChannels(channels) }, latestCatalog.models, latestCatalog.syncedAt) });
+                setSiteApiKey("");
+                message.success(t("config.siteSetup.enabled"));
+                return;
+            }
+            const publicModels = new Map(useSiteModelCatalogStore.getState().models.map((model) => [model.name, model]));
             const existingModels = new Map((existing?.models || []).map((model) => [model.name, model]));
-            const available = normalizeChannelModels(catalogModels.map((model) => existingModels.get(model.name) || model));
+            const available = normalizeChannelModels(fetched).map((model) => {
+                const source = publicModels.get(model.name) || model;
+                const previous = existingModels.get(model.name);
+                const capabilityOverride = previous?.capabilityOverride || Boolean(previous && previous.capability !== (previous.catalogCapability || source.capability));
+                return { ...source, script: previous?.script, capability: previous && capabilityOverride ? previous.capability : source.capability, catalogCapability: source.capability, capabilityOverride: capabilityOverride || undefined };
+            });
             if (!available.length) throw new Error(t("config.siteSetup.emptyModels"));
-            const updated: ModelChannel = { ...(existing || channel), baseUrl: channel.baseUrl, apiKey, apiFormat: "openai", models: normalizeChannelModels([...(existing?.models || []), ...available]) };
+            const names = new Set(available.map((model) => model.name));
+            const custom = (existing?.models || []).filter((model) => !names.has(model.name) && (!model.catalogCapability || model.script?.trim() || model.capabilityOverride || model.capability !== model.catalogCapability));
+            const updated: ModelChannel = { ...(existing || channel), apiKey, siteCatalogEnabled: false, models: normalizeChannelModels([...available, ...custom]) };
             const channels = existing ? current.channels.map((item) => item.id === channel.id ? updated : item) : [...current.channels, updated];
             const defaultFor = (capability: ModelCapability, value: string) => {
-                // 非创作端点的模型保留手动配置，不自动设为默认；自定义脚本按已有能力使用。
-                const models = available.filter((model) => {
-                    if (model.capability !== capability) return false;
-                    if (model.script?.trim()) return true;
-                    if (/embed|rerank|whisper|transcri|moderation|realtime|suno|speech[-_]to[-_]text|(^|[-_])(asr|stt|udio)([-_]|$)|转录|识别/i.test(model.name)) return false;
-                    return capability !== "audio" || /tts|speech|语音合成/i.test(model.name);
-                });
-                const preferred = models.find((model) => model.name === SITE_DEFAULT_MODEL_NAMES[capability]) || models.find((model) => model.name === modelOptionName(value)) || models[0];
+                const models = available.filter((model) => model.capability === capability && isCreativeModel(model));
+                const preferred = models.find((model) => model.name === modelOptionName(value)) || models[0];
                 return preferred ? encodeChannelModel(channel.id, preferred.name) : "";
             };
             const imageModel = defaultFor("image", current.imageModel);
@@ -157,15 +172,31 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                 model: imageModel,
                 imageModel,
                 videoModel: defaultFor("video", current.videoModel),
-                textModel: refreshModels ? defaultFor("text", current.textModel) : current.textModel,
-                audioModel: refreshModels ? defaultFor("audio", current.audioModel) : current.audioModel,
+                textModel: defaultFor("text", current.textModel),
+                audioModel: defaultFor("audio", current.audioModel),
             } });
             setSiteApiKey("");
-            message.success(t(refreshModels ? "config.siteSetup.refreshed" : "config.siteSetup.enabled", { count: available.length }));
+            message.success(t("config.siteSetup.refreshed", { count: available.length }));
         } catch (error) {
             message.error(t("config.siteSetup.failed", { error: error instanceof Error ? error.message : t("config.modelSelect.fetchFailed") }));
         } finally {
             setEnablingSite(false);
+        }
+    };
+
+    const syncSiteCatalog = async () => {
+        try {
+            const models = await catalog.refresh();
+            const current = useConfigStore.getState().config;
+            const existing = current.channels.find((channel) => channel.id === siteChannel?.id);
+            if (siteChannel && !existing) return;
+            if (existing && !isSiteChannel(existing)) throw new Error(t("config.siteSetup.changedWhileLoading"));
+            const channel = { ...(existing || createModelChannel({ name: "sub.zzshu.cc", baseUrl: DEFAULT_API_BASE_URLS[0] })), siteCatalogEnabled: true };
+            const channels = existing ? current.channels.map((item) => item.id === channel.id ? channel : item) : [...current.channels, channel];
+            useConfigStore.setState({ config: applySiteModelCatalog({ ...current, channels }, models, useSiteModelCatalogStore.getState().syncedAt) });
+            message.success(t("config.siteSetup.syncSuccess", { count: models.length }));
+        } catch (error) {
+            message.error(t("config.siteSetup.failed", { error: error instanceof Error ? error.message : t("config.modelSelect.fetchFailed") }));
         }
     };
 
@@ -246,7 +277,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                     <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                                         <div>
                                             <div className="flex items-center gap-2 text-sm font-semibold"><KeyRound className="size-4" />{t("config.siteSetup.title")} · sub.zzshu.cc</div>
-                                            <p className="mt-1.5 text-xs text-muted-foreground">{t("config.siteSetup.description", { count: SITE_PRESET_MODELS.length })}</p>
+                                            <p className="mt-1.5 text-xs text-muted-foreground">{t("config.siteSetup.description")}</p>
                                         </div>
                                         <a href={DEFAULT_API_BASE_URLS[0]} target="_blank" rel="noopener noreferrer" className="text-xs underline underline-offset-4">{t("config.siteSetup.visit")} ↗</a>
                                     </div>
@@ -254,8 +285,14 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                     <div className="flex flex-col gap-2 sm:flex-row">
                                         <Input.Password id={siteKeyInputId} value={siteApiKey} onChange={(event) => setSiteApiKey(event.target.value)} onPressEnter={() => { if (!enablingSite) void enableSite(); }} placeholder={siteChannel?.apiKey ? t("config.siteSetup.savedKeyPlaceholder") : "sk-..."} autoComplete="off" disabled={enablingSite} className="min-w-0 flex-1" />
                                         <Button type="primary" loading={enablingSite} disabled={!siteApiKey.trim() && !siteChannel?.apiKey.trim()} onClick={() => void enableSite()}>{t("config.siteSetup.save")}</Button>
-                                        <Button icon={<RefreshCw className="size-4" />} disabled={enablingSite || (!siteApiKey.trim() && !siteChannel?.apiKey.trim())} onClick={() => void enableSite(true)}>{t("config.siteSetup.refresh")}</Button>
                                     </div>
+                                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                                        <Button type="text" size="small" icon={<RefreshCw className="size-3.5" />} loading={catalog.loading} disabled={enablingSite} onClick={() => void syncSiteCatalog()}>{t("config.siteSetup.syncCatalog")}</Button>
+                                        <Button type="text" size="small" disabled={enablingSite || catalog.loading || (!siteApiKey.trim() && !siteChannel?.apiKey.trim())} onClick={() => void enableSite(true)}>{t("config.siteSetup.refresh")}</Button>
+                                        <span role="status" className="text-xs text-muted-foreground">{t(catalog.loading ? "config.siteSetup.catalogLoading" : catalog.models.length ? "config.siteSetup.catalogReady" : "config.siteSetup.catalogEmpty", { count: catalog.models.length })}</span>
+                                    </div>
+                                    {catalog.error ? <p role="alert" className="mt-1 text-xs text-destructive">{t("config.siteSetup.catalogFailed", { error: catalog.error })}</p> : null}
+                                    {siteChannel?.siteCatalogEnabled === false ? <p className="mt-1 text-xs text-muted-foreground">{t("config.siteSetup.manualModels")}</p> : null}
                                     <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t("config.siteSetup.help")}</p>
                                     <p className="mt-1 text-xs text-muted-foreground">{t("config.siteSetup.keyStored")}</p>
                                 </div>

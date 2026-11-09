@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { useConfigStore } from "@/stores/use-config-store";
 import { usePromptSourceScheduler } from "@/hooks/use-prompt-source-scheduler";
+import { useSiteModelCatalogStore } from "@/stores/use-site-model-catalog-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const { message } = App.useApp();
@@ -14,6 +15,14 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
 
     usePromptSourceScheduler();
+
+    useEffect(() => {
+        const catalog = useSiteModelCatalogStore.getState();
+        void catalog.initialize();
+        return useConfigStore.subscribe((state, previous) => {
+            if (state.config.channels !== previous.config.channels) catalog.applyToConfig();
+        });
+    }, []);
 
     useEffect(() => {
         if (handledConfigParams.current) return;
