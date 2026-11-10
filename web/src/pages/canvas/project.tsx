@@ -38,6 +38,7 @@ import { InfiniteCanvas } from "@/components/canvas/infinite-canvas";
 import { Minimap } from "@/components/canvas/canvas-mini-map";
 import { CanvasNode } from "@/components/canvas/canvas-node";
 import { CanvasNodePromptPanel, type CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
+import type { CanvasReferenceLinkHandler } from "@/components/canvas/canvas-node-reference-bar";
 import { CanvasToolbar } from "@/components/canvas/canvas-toolbar";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { CanvasSidePanel } from "@/components/canvas/canvas-side-panel";
@@ -175,6 +176,11 @@ function InfiniteCanvasPage() {
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const projectId = params.id || "";
+    const referenceProjectRef = useRef(projectId);
+    useLayoutEffect(() => {
+        referenceProjectRef.current = projectId;
+        return () => { referenceProjectRef.current = ""; };
+    }, [projectId]);
     const localAgentConnected = useAgentStore((state) => state.connected);
     const localAgentActivity = useAgentStore((state) => state.activity);
     const localAgentEnabled = useAgentStore((state) => state.enabled);
@@ -952,6 +958,34 @@ function InfiniteCanvasPage() {
         if (!source || !isCanvasReferenceNode(source, nodesRef.current)) return;
         setConnections((prev) => [...prev, { id: nanoid(), fromNodeId, toNodeId: referencePickerNodeId }]);
     }, [referenceConnectedNodeIds, referencePickerNodeId]);
+
+    const addNodeReferenceLinks = useCallback<CanvasReferenceLinkHandler>(async (nodeId, type, urls) => {
+        const imageSizes = type === CanvasNodeType.Image ? await Promise.all(urls.map(readImageMeta)) : [];
+        const target = nodesRef.current.find((node) => node.id === nodeId);
+        if (referenceProjectRef.current !== projectId || !target) throw new Error(t("canvas.references.targetMissing"));
+        const incomingIds = new Set(connectionsRef.current.filter((connection) => connection.toNodeId === nodeId).map((connection) => connection.fromNodeId));
+        let top = nodesRef.current.filter((node) => incomingIds.has(node.id) && node.position.x < target.position.x).reduce((bottom, node) => Math.max(bottom, node.position.y + node.height + 32), target.position.y);
+        const addedNodes = urls.map((url, index) => {
+            const meta = imageSizes[index];
+            const spec = NODE_DEFAULT_SIZE[type];
+            const size = meta ? fitNodeSize(meta.width, meta.height) : spec;
+            const node = createCanvasNode(type, { x: 0, y: 0 }, {
+                content: url,
+                sourceUrl: url,
+                status: NODE_STATUS_SUCCESS,
+                ...(meta ? { naturalWidth: meta.width, naturalHeight: meta.height } : {}),
+            });
+            const position = { x: target.position.x - size.width - 100, y: top };
+            top += size.height + 32;
+            return { ...node, width: size.width, height: size.height, position };
+        });
+        const nextNodes = [...nodesRef.current, ...addedNodes];
+        const nextConnections = [...connectionsRef.current, ...addedNodes.map((node) => ({ id: nanoid(), fromNodeId: node.id, toNodeId: nodeId }))];
+        nodesRef.current = nextNodes;
+        connectionsRef.current = nextConnections;
+        setNodes(nextNodes);
+        setConnections(nextConnections);
+    }, [projectId, t]);
 
     useEffect(() => {
         if (!referencePickerNodeId) return;
@@ -3106,6 +3140,7 @@ function InfiniteCanvasPage() {
                     onClose={() => setDialogNodeId(null)}
                     onDisconnectReference={disconnectNodeReference}
                     onStartReferenceSelection={startNodeReferenceSelection}
+                    onAddReferenceLinks={addNodeReferenceLinks}
                 />
             ) : (
                 <CanvasNodePromptPanel
@@ -3120,6 +3155,7 @@ function InfiniteCanvasPage() {
                     onStop={confirmStopGeneration}
                     onDisconnectReference={disconnectNodeReference}
                     onStartReferenceSelection={startNodeReferenceSelection}
+                    onAddReferenceLinks={addNodeReferenceLinks}
                     modeOverride={getNodeDefinition(panelNode.type)?.useBuiltinPanel?.mode}
                     onImageSettingsOpenChange={(open) => {
                         setNodeImageSettingsOpen(open);
@@ -3127,7 +3163,7 @@ function InfiniteCanvasPage() {
                     }}
                 />
             ),
-        [configInputsById, confirmStopGeneration, connectedNodesByNodeId, disconnectNodeReference, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, mentionReferencesByNodeId, nodes, renderPluginPanel, runningNodeId, startNodeReferenceSelection],
+        [addNodeReferenceLinks, configInputsById, confirmStopGeneration, connectedNodesByNodeId, disconnectNodeReference, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, mentionReferencesByNodeId, nodes, renderPluginPanel, runningNodeId, startNodeReferenceSelection],
     );
 
     const renderNodeContentPanel = useCallback(

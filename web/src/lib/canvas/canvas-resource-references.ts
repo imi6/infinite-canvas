@@ -51,20 +51,16 @@ export async function resolveCanvasReferenceImages(references: CanvasResourceRef
 }
 
 export function getMentionResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
-    const configInputs = expandGroupResourceNodes(getConnectedConfigInputNodes(nodeId, nodes, connections), nodes);
-    if (configInputs.length) return configInputs;
-    const ownInputs = expandGroupResourceNodes(getContextInputNodes(nodeId, nodes, connections), nodes);
-    if (ownInputs.length) return ownInputs;
+    const inputs = expandGroupResourceNodes(getGenerationResourceNodes(nodeId, nodes, connections), nodes);
+    if (inputs.length) return inputs;
     const node = nodes.find((item) => item.id === nodeId);
     return node && isResourceNode(node) ? [node] : [];
 }
 
 export function getGenerationResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
     const configInputs = getConnectedConfigInputNodes(nodeId, nodes, connections);
-    if (configInputs.length) return configInputs;
     const ownInputs = getContextInputNodes(nodeId, nodes, connections);
-    if (ownInputs.length) return ownInputs;
-    return [];
+    return [...new Map([...configInputs, ...ownInputs].map((node) => [node.id, node])).values()];
 }
 
 function getContextInputNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
