@@ -69,13 +69,11 @@ function buildComposerGenerationContext(inputs: NodeGenerationInput[], prompt: s
     const labelByNodeId = new Map<string, string>();
     const textBlocks: string[] = [];
     const counts = { image: 0, video: 0, audio: 0, text: 0 };
-    let hasToken = false;
     let lastIndex = 0;
     let nextPrompt = "";
 
     for (const match of prompt.matchAll(/@\[node:([^\]]+)\]/g)) {
         if (match.index === undefined) continue;
-        hasToken = true;
         nextPrompt += prompt.slice(lastIndex, match.index);
         const input = inputByNodeId.get(match[1]);
         if (input) {
@@ -96,22 +94,11 @@ function buildComposerGenerationContext(inputs: NodeGenerationInput[], prompt: s
 
     nextPrompt += prompt.slice(lastIndex);
     if (textBlocks.length) nextPrompt = `${nextPrompt.trim()}\n\n${textBlocks.join("\n\n")}`;
-    const referenceImages = selectedInputs.map((input) => input.image).filter((image): image is ReferenceImage => Boolean(image));
-    const referenceVideos = selectedInputs.map((input) => input.video).filter((video): video is ReferenceVideo => Boolean(video));
-    const referenceAudios = selectedInputs.map((input) => input.audio).filter((audio): audio is ReferenceAudio => Boolean(audio));
-
-    if (!hasToken) {
-        return {
-            prompt,
-            referenceImages: [],
-            referenceVideos: [],
-            referenceAudios: [],
-            textCount: 0,
-            imageCount: 0,
-            videoCount: 0,
-            audioCount: 0,
-        };
-    }
+    // 显式引用决定素材顺序，随后补上已连接的其他媒体，避免参考栏与实际请求不一致。
+    const mediaInputs = [...new Map([...selectedInputs, ...flattenGenerationInputs(inputs).filter((input) => input.type !== "text")].map((input) => [input.nodeId, input])).values()];
+    const referenceImages = mediaInputs.map((input) => input.image).filter((image): image is ReferenceImage => Boolean(image));
+    const referenceVideos = mediaInputs.map((input) => input.video).filter((video): video is ReferenceVideo => Boolean(video));
+    const referenceAudios = mediaInputs.map((input) => input.audio).filter((audio): audio is ReferenceAudio => Boolean(audio));
 
     return {
         prompt: nextPrompt,

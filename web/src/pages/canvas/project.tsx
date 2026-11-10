@@ -2374,6 +2374,10 @@ function InfiniteCanvasPage() {
             const sourceTextContent = sourceNode?.type === CanvasNodeType.Text ? sourceNode.metadata?.content?.trim() || "" : "";
             const editingTextNode = mode === "text" && Boolean(sourceTextContent);
             const rawContext = buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? t("canvas.projectPage.editTextPrompt", { source: sourceTextContent, prompt }) : prompt);
+            if (mode === "video" && sourceNode?.type === CanvasNodeType.Image) {
+                rawContext.referenceImages = [...new Map([...sourceNodeReferenceImages(sourceNode), ...rawContext.referenceImages].map((image) => [image.id, image])).values()];
+                rawContext.imageCount = rawContext.referenceImages.length;
+            }
             const generationContext = mode === "video" ? rawContext : await hydrateNodeGenerationContext(rawContext);
             const effectivePrompt = generationContext.prompt.trim();
             if (runController.signal.aborted) {
@@ -2562,6 +2566,7 @@ function InfiniteCanvasPage() {
                             generateAudio: generationConfig.videoGenerateAudio,
                             watermark: generationConfig.videoWatermark,
                             videoMode: generationConfig.videoMode,
+                            videoSourceNodeId: sourceNode?.type === CanvasNodeType.Image ? sourceNode.id : undefined,
                             references: generationReferenceUrls(generationContext),
                         },
                     };
@@ -2774,7 +2779,8 @@ function InfiniteCanvasPage() {
                 await pollVideoNodeTask(node);
                 return;
             }
-            const sourceNode = findRetrySourceNode(node.id, nodesRef.current, connectionsRef.current) || node;
+            const sourceImage = node.type === CanvasNodeType.Video && connectionsRef.current.some((connection) => connection.toNodeId === node.id && connection.fromNodeId === node.metadata?.videoSourceNodeId) ? nodesRef.current.find((item) => item.id === node.metadata?.videoSourceNodeId && item.type === CanvasNodeType.Image) : undefined;
+            const sourceNode = sourceImage || findRetrySourceNode(node.id, nodesRef.current, connectionsRef.current) || node;
             const savedImageMetadata = node.type === CanvasNodeType.Image ? node.metadata : undefined;
             const hasSavedImageMetadata = Boolean(savedImageMetadata?.generationType);
             const generationConfig =
@@ -2787,13 +2793,18 @@ function InfiniteCanvasPage() {
                           background: savedImageMetadata.background ?? effectiveConfig.background,
                           count: "1",
                       }
-                    : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
+                    : { ...buildGenerationConfig(effectiveConfig, sourceImage ? node : sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
                 return;
             }
 
             const rawContext = hasSavedImageMetadata ? null : buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || "");
+            if (rawContext && sourceImage) {
+                rawContext.referenceImages = [...new Map([...sourceNodeReferenceImages(sourceImage), ...rawContext.referenceImages].map((image) => [image.id, image])).values()];
+                rawContext.imageCount = rawContext.referenceImages.length;
+                rawContext.prompt = node.metadata?.prompt ?? rawContext.prompt;
+            }
             const context = rawContext && node.type !== CanvasNodeType.Video ? await hydrateNodeGenerationContext(rawContext) : rawContext;
             const prompt = (savedImageMetadata?.prompt || context?.prompt || "").trim();
             if (!prompt && !(node.type === CanvasNodeType.Video && context && (context.referenceImages.length || context.referenceVideos.length || context.referenceAudios.length))) {
